@@ -1,0 +1,1036 @@
+* {
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Poppins', sans-serif;
+  background: #f0f9ff;
+}
+
+/* BUTTONS */
+.top-buttons {
+  text-align: center;
+  margin: 15px;
+}
+
+button {
+  padding: 10px 18px;
+  margin: 5px;
+  border-radius: 20px;
+  border: none;
+  background: #38bdf8;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+button:hover {
+  background: #0ea5e9;
+}
+
+#report {
+  display: block;
+}
+
+/* WRAPPER */
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* EACH A4 = ONE PDF PAGE */
+.a4 {
+  /* break-after: auto; */
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+}
+
+/*  EACH CHILD PAGE */
+.page {
+  width: 210mm;
+  min-height: 297mm;
+
+  position: relative;
+  display: block;
+
+  overflow: hidden;
+  page-break-after: always;
+
+  break-after: page;
+
+  /* background: #f9e214 !important;   */
+}
+
+.page-inner {
+  padding: 18mm;
+  box-sizing: border-box;
+  /* height: calc(100% - 0.1mm); prevents overflow rounding issue */
+  /* overflow: hidden; */
+}
+
+.page:last-child {
+  page-break-after: auto;
+  min-height: 297mm;
+}
+
+.page::after {
+  content: attr(data-page);
+  position: absolute;
+  bottom: 10px;
+  right: 20px;
+  font-size: 12px;
+  color: #333;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  top: 12mm;
+  bottom: 12mm;
+  left: 12mm;
+  right: 12mm;
+  /* border: 5px solid #2563eb; */
+  pointer-events: none;
+}
+
+/* COLORS */
+/* VIBRANT SMOOTH PAGE COLORS */
+/* .page:nth-child(1) {
+  background:#ffe066;;
+}
+
+.page:nth-child(2) {
+  background:#ffe066;;
+}
+
+.page:nth-child(3) {
+  background: #ffe066;;
+}
+
+.page:nth-child(4) {
+  background: #ffe066;;
+}
+
+.page:nth-child(5) {
+  background: #ffe066;;
+}
+
+.page:nth-child(6) {
+  background: #ffe066;;
+}
+
+.page:nth-child(7) {
+  background: #ffe066;;
+}
+
+.page:nth-child(8) {
+  background: #ffe066;;
+} */
+/* DECOR */
+
+
+/* HEADER */
+/* HEADER */
+.school-header {
+  text-align: center;
+  font-family: 'Poppins', sans-serif;
+}
+
+/* SCHOOL NAME (Elegant Calligraphy Feel) */
+.school-header h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: 30px;
+  color: #800000;              /* maroon */
+  margin: 6px 0;
+  letter-spacing: 1px;
+}
+
+/* SUB TEXT */
+.school-header p {
+  font-size: 13px;
+  margin: 2px 0;
+  color: #333;
+}
+
+/* LOGO */
+.logo-img {
+  height: 60px;
+  margin: 6px 0;
+}
+
+/* TAGLINE (REAL CALLIGRAPHY) */
+.tagline {
+  font-family: 'Great Vibes', cursive;
+  font-size: 20px;
+  color: #800000;
+  margin-top: 4px;
+}
+
+/* MAIN TITLES */
+h3 {
+  font-family: 'Playfair Display', serif;
+  font-size: 16px;
+  color: #800000;
+  margin: 6px 0;
+}
+
+h4 {
+  font-family: 'Playfair Display', serif;
+  font-size: 14px;
+  color: #800000;
+  margin: 5px 0;
+}
+
+/* STUDENT GRID */
+.student-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 10px;
+  background: #ffffff;
+  padding: 10px;
+  border-radius: 12px;
+  border: 2px dashed #38bdf8;
+}
+
+.student-grid div {
+  background: #f8fafc;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.student-grid .full {
+  grid-column: span 2;
+}
+
+/* BOXES */
+.subject-box,
+.signature-box,
+.growth-box,
+.grade-box,
+.attendance,
+.rules {
+  page-break-inside: avoid;
+}
+
+/* SUBJECT */
+.subject-box {
+  background: #fff;
+  padding: 8px;
+  margin: 6px 0;
+  border-radius: 12px;
+  border: 2px solid #e0f2fe;
+  margin-bottom: 6px;
+  page-break-inside: avoid;
+}
+
+/* ATTENDANCE */
+.attendance {
+  padding: 6px;
+  border-radius: 10px;
+  border: 2px solid #bae6fd;
+  font-size: 10px;
+  text-align: center;
+}
+
+/* GRADE */
+.grade-box {
+  padding: 6px;
+  border-radius: 10px;
+  margin-top: 6px;
+  font-size: 9px;
+  border: 2px solid #ddd6fe;
+}
+
+/* SIGNATURE */
+.signature-box {
+  margin-top: 8px;
+  border: 2px solid #000;
+  font-size: 10px;
+}
+
+.sig-header,
+.sig-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.sig-header div,
+.sig-row div {
+  border: 1px solid #000;
+  text-align: center;
+  padding: 4px;
+}
+
+/* GROWTH */
+.growth-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 8px;
+  border: 2px solid #000;
+  border-radius: 10px;
+  overflow: hidden;
+  height: 11%;
+}
+
+.growth-section {
+  padding: 6px;
+  text-align: center;
+}
+
+.growth-section:first-child {
+  border-right: 1px solid #000;
+}
+
+/* REMARKS */
+.remarks-box-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.line {
+  border-bottom: 2px dotted #333;
+  height: 16px;
+}
+
+/* RULES */
+.rules {
+  font-size: 9px;
+  margin-top: 8px;
+  padding: 6px;
+  border-left: 4px solid #38bdf8;
+  background: #fff;
+}
+
+/*  PRINT FIX (MOST IMPORTANT) */
+@media print {
+  .top-buttons {
+    display: none;
+  }
+
+  body {
+    background: white;
+  }
+}
+
+/* GRAPH CONTAINER */
+.graph {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
+  height: 160px;
+  margin-top: 10px;
+  padding: 10px;
+  background: linear-gradient(180deg, #f0f9ff, #ffffff);
+  border-radius: 15px;
+  border: 2px solid #bae6fd;
+}
+
+/* EACH BAR BLOCK */
+.graph div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* BAR STYLE */
+.bar {
+  width: 30px;
+  border-radius: 12px 12px 6px 6px;
+  transition: 0.3s;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+}
+
+/* FUN COLORS */
+.graph div:nth-child(1) .bar {
+  background: linear-gradient(180deg, #fb7185, #f43f5e);
+}
+
+.graph div:nth-child(2) .bar {
+  background: linear-gradient(180deg, #34d399, #10b981);
+}
+
+.graph div:nth-child(3) .bar {
+  background: linear-gradient(180deg, #60a5fa, #3b82f6);
+}
+
+.graph div:nth-child(4) .bar {
+  background: linear-gradient(180deg, #facc15, #eab308);
+}
+
+/* HOVER EFFECT */
+.bar:hover {
+  transform: scale(1.08);
+}
+
+/* LABEL */
+.graph span {
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #334155;
+}
+
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body {
+    background: none !important;
+  }
+
+  .a4 {
+    box-shadow: none !important;
+  }
+}
+
+.subject-box,
+.student-grid,
+.attendance,
+.grade-box,
+.signature-box,
+.growth-box {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+/* SUBJECT BOX = TABLE STYLE */
+/* SUBJECT BOX */
+.subject-box {
+  background: rgba(255,255,255,0.95);
+  border-radius: 12px;
+  padding: 10px;
+  margin: 8px 0;
+  border: 2px solid #e0e7ff;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+}
+
+/* TITLE */
+.subject-box h4 {
+  text-align: center;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid #c7d2fe;
+  color: #4f46e5;
+  font-size: 12px;
+}
+
+/* HEADER ROW */
+.table-header {
+  display: grid;
+  grid-template-columns: 1.6fr 0.7fr 0.7fr;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  font-weight: bold;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  margin-bottom: 4px;
+}
+
+/* DATA ROW */
+.row {
+  display: grid;
+  grid-template-columns: 1.6fr 0.7fr 0.7fr;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 2px 0;
+}
+
+/* LAST ROW */
+.row:last-child {
+  border-bottom: none;
+}
+
+/* COLUMNS */
+.label {
+  text-align: left;
+  font-weight: 500;
+  color: #111827;
+  font-size: 100%;
+}
+
+.t1, .t2 {
+  text-align: center;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* ALTERNATE ROW COLOR */
+.row:nth-child(even) {
+  background: #f8fafc;
+}
+
+/* HOVER (optional nice touch) */
+.row:hover {
+  background: #e0f2fe;
+}
+
+.report-card {
+  background-color: #ffe066; /* full yellow */
+  padding: 20px;
+  border-radius: 0; /* remove any rounding */
+}
+
+.attendance-grid {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+
+.table-header {
+  font-weight: bold;
+  border-bottom: 2px solid #000;
+}
+
+.row {
+  border-bottom: 1px solid #ccc;
+}
+
+.label {
+  text-align: left;
+}
+
+.t1, .t2 {
+  text-align: center;
+}
+
+@media print {
+  body {
+    margin: 0;
+  }
+
+  .page {
+    margin: 0;
+    width: 210mm;
+    height: 297mm;
+    border: 3px solid #1e3a8a;
+    page-break-after: always;
+  }
+}
+
+/* #report {
+  transform: scale(0.96);
+  transform-origin: top center;
+} */
+
+h4 {
+  margin: 4px 0;
+}
+
+h3, h4, h5 {
+  color: #800000;   /* maroon */
+  text-align: center;
+  font-size: 120%;
+}
+
+.calligraphy {
+  text-align: center;
+  font-family: "Brush Script MT", cursive;
+  font-size: 24px;
+  color: #0ea5e9;
+  margin-bottom: 10px;
+}
+
+.logo-container {
+  position: absolute;
+  bottom: 15mm;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+.logo-container img {
+  height: 60px;
+  opacity: 0.9;
+}
+
+.page:nth-child(3) .subject-box {
+  margin: 10px 0;       /* was 8px */
+  padding: 8px;        /* was 10px */
+}
+
+.page:nth-child(3) .subject-box h4 {
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+.page:nth-child(3) .table-header {
+  font-size: 12.5px;
+  padding: 2px 4px;
+}
+
+.page:nth-child(3) .row {
+  font-size: 12px;
+  padding: 1px 2px;
+}
+
+.page:nth-child(3) .row span {
+  line-height: 1.1;
+}
+
+.page:nth-child(3) .page-inner {
+  padding: 15mm;  /* was 18mm */
+}
+
+.page:nth-child(3) h3 {
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+
+.page:nth-child(3) .page-inner {
+  overflow: hidden;
+}
+
+.page:nth-child(3) .label {
+  font-size: 12.5px;
+}
+
+.page:nth-child(3) .t1,
+.page:nth-child(3) .t2 {
+  font-size: 12px;
+}
+
+.page:nth-child(3) .row {
+  padding: 4px 6px;   /* was ~1–2px */
+}
+
+.page:nth-child(2) .table-header {
+  padding: 5px 6px;
+}
+
+.page:nth-child(2) .subject-box {
+  margin: 10px 0;       /* was 8px */
+  padding: 6px;        /* was 10px */
+}
+
+.page:nth-child(2) .subject-box h4 {
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+.page:nth-child(2) .table-header {
+  font-size: 12.5px;
+  padding: 2px 4px;
+}
+
+.page:nth-child(2) .row {
+  font-size: 12px;
+  padding: 1px 2px;
+}
+
+.page:nth-child(2) .row span {
+  line-height: 1.1;
+}
+
+.page:nth-child(2) .page-inner {
+  padding: 15mm;  /* was 18mm */
+}
+
+.page:nth-child(2) h3 {
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+.row, .table-header {
+  margin: 0 !important;
+}
+
+.page:nth-child(2) .page-inner {
+  overflow: hidden;
+}
+
+.page:nth-child(2) .label {
+  font-size: 12.5px;
+}
+
+.page:nth-child(2) .t1,
+.page:nth-child(2) .t2 {
+  font-size: 12px;
+}
+
+.page:nth-child(2) .row {
+  padding: 4px 6px;   /* was ~1–2px */
+}
+
+.page:nth-child(2) .table-header {
+  padding: 5px 6px;
+}
+
+.page-inner h3{
+    font-size: 150%;
+}
+
+.page:nth-child(3) .subject-box h4 {
+  font-size: 20px;
+  margin-bottom: 5px;
+}
+
+.page:nth-child(4) .subject-box h4 {
+  font-size: 20px;
+  margin-bottom: 5px;
+}
+
+.page:nth-child(2) .subject-box h4 {
+  font-size: 20px;
+  margin-bottom: 5px;
+}
+
+/* .page:nth-child(3) .subject-box h4 {
+  font-size: 20px;
+  margin-bottom: 5px;
+} */
+
+.page:nth-child(3) h3 {
+  font-size: 25px;
+  margin-bottom: 6px;
+}
+
+.page:nth-child(2) h3 {
+  font-size: 25px;
+  margin-bottom: 6px;
+}
+
+.page:nth-child(4) h3 {
+  font-size: 25px;
+  margin-bottom: 6px;
+}
+
+/* .page:nth-child(3) h3 {
+  font-size: 25px;
+  margin-bottom: 6px;
+} */
+
+.page:nth-child(1) .udi {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: #374151;
+}
+
+/* .page:nth-child(1) .school-header {
+  text-align: center;
+  margin-bottom: 6px;
+} */
+
+.page:nth-child(1) .school-header h1 {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #7f1d1d;
+  margin: 4px 0;
+}
+
+/* .page:nth-child(1) .school-header p {
+  font-size: 13.5px;
+  margin: 2px 0;
+  color: #374151;
+} */
+
+
+
+
+.page:nth-child(1) .school-header::after {
+  content: "";
+  display: block;
+  width: 65%;
+  height: 2px;
+  background: #7f1d1d;
+  margin: 6px auto 8px auto;
+  opacity: 0.6;
+}
+
+.page:nth-child(1) .center-text {
+  text-align: center;
+  margin: 10px 0;
+}
+
+.page:nth-child(1) .main-title h2 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  margin: 0;
+}
+
+.page:nth-child(1) .sub-title {
+  font-size: 14px;
+  margin-top: 3px;
+  color: #1e3a8a;
+  font-weight: 500;
+}
+
+.page:nth-child(1) p {
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.page:nth-child(1) .student-grid {
+  font-size: 13.5px;
+  padding: 14px;
+  gap: 8px;
+  margin-top: 10px;
+  border-radius: 14px;
+}
+
+.page:nth-child(1) .student-grid div {
+  padding: 6px 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.page:nth-child(1) .student-grid b {
+  font-weight: 600;
+  color: #1e3a8a;
+}
+
+.page:nth-child(1) .student-grid .full {
+  grid-column: span 2;
+  padding: 8px;
+}
+
+.page:nth-child(1) .student-grid {
+  border: 2px solid #e0f2fe;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+}
+
+.page:nth-child(1) {
+  font-weight: 500; /* base */
+}
+
+.page:nth-child(1) b,
+.page:nth-child(1) strong {
+  font-weight: 700;
+}
+
+.page:nth-child(1) .student-grid div {
+  font-weight: 600;
+}
+
+.page:nth-child(1) .school-header h1 {
+  font-weight: 900;
+}
+
+.page:nth-child(1) .main-title h2 {
+  font-weight: 800;
+}
+
+
+.page:nth-child(1) .academic-year {
+  text-align: center;
+  font-weight: 700;
+  font-size: 15px;
+  margin: 8px 0;
+  color: #1e3a8a;
+}
+
+.page:nth-child(1) .main-title {
+  background: #7f1d1d; /* maroon */
+  color: #fde047;      /* yellow */
+  padding: 8px 10px;
+  border-radius: 8px;
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+.page:nth-child(1) .main-title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: inherit;
+}
+
+.page:nth-child(1) .center-text {
+  text-align: center;
+}
+
+.page:nth-child(1) .school-header {
+  /* background: rgba(255, 255, 255, 0.85); */
+  /* border: 2px solid #7f1d1d; */
+  /* border-radius: 12px; */
+  padding: 10px 12px;
+  margin: 8px auto;
+  width: 85%;
+  text-align: center;
+}
+
+.page:nth-child(1) .school-header p {
+  margin: 2px 0;
+  font-size: 15.5px;
+  font-weight: 500;
+}
+
+.page:nth-child(1) .school-header h3 {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin-top: 4px;
+  color: #7f1d1d;
+}
+
+.page:nth-child(1) .address {
+  font-size: 12.5px;
+  color: #374151;
+}
+
+.page:nth-child(1) .logo-img {
+  height: 185px;
+  margin: 6px 0;
+  height: 110px;  /* reduce from 185 */
+
+}
+
+.page:nth-child(1) .school-info-block img {
+  display: block;
+  margin: 6px auto;
+}
+
+.page:nth-child(1) .tagline {
+  font-size: 30px;
+  font-family: 'Great Vibes', cursive;
+  color: #7f1d1d;
+  margin-top: 4px;
+}
+
+.page:nth-child(1) .CBSE {
+  font-size: 40px;
+  font-family: 'Great Vibes', cursive;
+  color: #7f1d1d;
+  margin-top: 4px;
+
+}
+
+.page .logo-container {
+  position: absolute;
+  bottom: 10mm;
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+.page .logo-container img {
+  height: 50px;
+  opacity: 0.75; /* subtle watermark look */
+  margin-bottom: 12px;
+}
+
+.table-header,
+.row {
+  display: grid;
+  grid-template-columns: 2.2fr 0.9fr 0.9fr;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.table-header span,
+.row span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.table-header span:first-child,
+.row span:first-child {
+  justify-content: flex-start;
+}
+
+.label {
+  padding-left: 4px;
+}
+
+.t1, .t2 {
+  font-weight: 600;
+}
+
+#report {
+  width: 210mm;
+}
+
+.subject-box,
+.student-grid,
+.signature-box,
+.growth-box {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.main-title {
+  position: relative;
+  z-index: 1;
+  transform: translateZ(0);
+}
+
+/* ================= NURSERY LIGHT YELLOW BACKGROUND FIX ================= */
+
+/* Force full page yellow */
+.page {
+  background: #fff8e1 !important;   /* soft light yellow */
+}
+
+/* Ensure PDF print also keeps color */
+@media print {
+  .page {
+    background: #fff8e1 !important;
+  }
+}
+
+/* ================= MAROON FRAME DESIGN ================= */
+
+/* PAGE FRAME */
+.page {
+  position: relative;
+  background: #fff8e1 !important;
+}
+
+/* OUTER DOUBLE BORDER */
+.page::before {
+  content: "";
+  position: absolute;
+  top: 10mm;
+  bottom: 10mm;
+  left: 10mm;
+  right: 10mm;
+
+  border: 4px double #800000;   /* maroon */
+  border-radius: 10px;
+
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* INNER CONTENT SPACING */
+.page-inner {
+  position: relative;
+  z-index: 1;
+
+  padding: 18mm;
+}
+
+/* OPTIONAL INNER SOFT BOX (premium feel) */
+/* .page-inner::after {
+  content: "";
+  position: absolute;
+  top: 5mm;
+  bottom: 5mm;
+  left: 5mm;
+  right: 5mm;
+
+  border: 1.5px solid rgba(128, 0, 0, 0.3);
+  border-radius: 8px;
+
+  pointer-events: none;
+} */
