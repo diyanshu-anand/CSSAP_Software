@@ -1,6 +1,6 @@
 {
   "name": "abm-frontend",
-  "version": "0.1.28",
+  "version": "0.1.30",
   "private": true,
   "main": "electron/main.js",
   "description": "ABM School ERP System",

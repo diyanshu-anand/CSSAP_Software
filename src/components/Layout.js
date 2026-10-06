@@ -28,9 +28,9 @@ function Layout({ children }) {
 
         { label: "Expenses", path: "/expenses", roles: ["principal", "accountant"] },
 
-        { label: "Fees", path: "/fees", roles: ["principal", "accountant"] },
+        // { label: "Fees", path: "/fees", roles: ["principal", "accountant"] },
 
-        { label: "Fees", path: "/fee-history", roles: ["principal", "accountant"] },
+        { label: "Fees History", path: "/fee-history", roles: ["principal", "accountant"] },
 
         {label: "Fees - New Section", path:"/feesnewentry", roles:["principal", "accountant"]},
         

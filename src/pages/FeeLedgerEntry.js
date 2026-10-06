@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import axios from "axios";
 
 import {
@@ -111,6 +111,8 @@ export default function FeeLedger() {
     const [isEditing, setIsEditing] = useState(false);
 
     const [ignoreFeeStructure, setIgnoreFeeStructure] = useState(false);
+
+    const [summaryFees, setSummaryFees] = useState([]);
 
     const navigate = useNavigate();
 
@@ -277,6 +279,8 @@ export default function FeeLedger() {
         new Date().toISOString().split("T")[0]
     );
 
+    const [ignoreLateFeeState, setIgnoreLateFeeState] = useState(false);
+
     const [remarks, setRemarks] = useState("");
 
     const updateLedger = (month, field, value) => {
@@ -378,10 +382,53 @@ export default function FeeLedger() {
     };
 
 
+    // Newly added to load summary fees .......
 
-    const handleStudentSelect = (student) => {
+
+    const loadSummaryFees = async (student) => {
+        if (!student) {
+            setSummaryFees([]);
+            return;
+        }
+
+        try {
+            const res = await axios.get(`${API}/getFees.php`);
+
+            if (!res.data.status) {
+                setSummaryFees([]);
+                return;
+            }
+
+            const allFees = res.data.data || [];
+
+            const studentFees = allFees.filter(
+                (fee) =>
+                    fee.student_uuid === student.uuid &&
+                    fee.fee_status !== "CANCELLED"
+            );
+
+            setSummaryFees(studentFees);
+        } catch (err) {
+            console.error(
+                "Unable to load payment summary:",
+                err
+            );
+
+            setSummaryFees([]);
+        }
+    };
+
+
+
+    const handleStudentSelect = async (student) => {
 
         setSelectedStudent(student);
+
+        if (student) {
+            await loadSummaryFees(student);
+        } else {
+            setSummaryFees([]);
+        }
 
         setLedger(createEmptyLedger());
 
@@ -514,8 +561,21 @@ export default function FeeLedger() {
         // Already Paid Months (supports multi-month receipts)
         //--------------------------------------------------
 
+        // Fee filtration ka ye tareeka dangerous hai as
+        // Settlement calculation ke liye ye deduplication dangerous ho sakta hai.
+        // Agar same student ne genuinely do baar ₹300 same month/component pay kiya, 
+        // to second transaction accounting se remove ho sakti hai.
+
+        // const paidFees = fees.filter(
+        //     (fee) => fee.student_uuid === student.uuid
+        // );
+
+
+
         const paidFees = fees.filter(
-            (fee) => fee.student_uuid === student.uuid
+            (fee) =>
+                fee.student_uuid === student.uuid &&
+                String(fee.fee_status || "ACTIVE").toUpperCase() === "ACTIVE"
         );
 
         const history = {
@@ -837,21 +897,129 @@ export default function FeeLedger() {
                 newLedger[month].fee = fee;
             });
 
-            console.log("Balance Check", {
-                receipt: fee.receipt_number,
-                feeBalance: fee.balance,
-                breakdownBalance: breakdown.totals?.balance
-            });
+            // Affecting the accounting principal and accounting method. 
+            // Wrong accounting implementation identified ...........
 
-            const bal = Number(fee.balance || 0);
+            // console.log("Balance Check", {
+            //     receipt: fee.receipt_number,
+            //     feeBalance: fee.balance,
+            //     breakdownBalance: breakdown.totals?.balance
+            // });
 
-            if (bal > 0) {
-                history.pending += bal;
-            } else if (bal < 0) {
-                history.deposit += Math.abs(bal);
+            // const bal = Number(fee.balance || 0);
+
+            // if (bal > 0) {
+            //     history.pending += bal;
+            // } else if (bal < 0) {
+            //     history.deposit += Math.abs(bal);
+            // }
+
+
+        });
+
+        // ==========================================================
+        // REBUILD PENDING / DEPOSIT CHRONOLOGICALLY
+        // ==========================================================
+        // DO NOT use fee.balance here.
+        // balance is a snapshot of the transaction at that time.
+        // We need to reconstruct the actual financial position.
+
+        let runningPending = 0;
+        let runningDeposit = 0;
+
+        // Modification is required to do due to identification of flaw in accounting .....
+        // const settlementFees = [...uniquePaidFees].sort((a, b) => {
+        //     const dateA = new Date(a.payment_date || 0);
+        //     const dateB = new Date(b.payment_date || 0);
+
+        //     const dateDiff = dateA - dateB;
+
+        //     if (dateDiff !== 0) {
+        //         return dateDiff;
+        //     }
+
+        //     return Number(a.id || 0) - Number(b.id || 0);
+        // });
+
+        const settlementFees = [...paidFees].sort((a, b) => {
+            const dateA = new Date(a.payment_date || 0);
+            const dateB = new Date(b.payment_date || 0);
+
+            const dateDiff = dateA - dateB;
+
+            if (dateDiff !== 0) {
+                return dateDiff;
             }
 
+            return Number(a.id || 0) - Number(b.id || 0);
+        });
 
+        // Save ledger bacha hai aake karta hu usko tune in..... 
+        // Kar liya done ....... (12:54 a.m.)
+        settlementFees.forEach((fee) => {
+            const due = Math.max(
+                0,
+                Number(fee.transaction_total || 0)
+            );
+
+            const paid = Math.max(
+                0,
+                Number(fee.amount || 0)
+            );
+
+            // ------------------------------------------------------
+            // CASE 1:
+            // Payment is less than transaction due
+            // ------------------------------------------------------
+            if (paid < due) {
+                runningPending += due - paid;
+                return;
+            }
+
+            // ------------------------------------------------------
+            // CASE 2:
+            // Fully paid exactly
+            // ------------------------------------------------------
+            if (paid === due) {
+                return;
+            }
+
+            // ------------------------------------------------------
+            // CASE 3:
+            // Payment is greater than current transaction due
+            // ------------------------------------------------------
+            let extraPayment = paid - due;
+
+            // First consume any old pending
+            if (runningPending > 0 && extraPayment > 0) {
+                const pendingUsed = Math.min(
+                    runningPending,
+                    extraPayment
+                );
+
+                runningPending -= pendingUsed;
+                extraPayment -= pendingUsed;
+            }
+
+            // Anything still left becomes genuine deposit
+            if (extraPayment > 0) {
+                runningDeposit += extraPayment;
+            }
+        });
+
+        history.pending = Math.max(0, runningPending);
+        history.deposit = Math.max(0, runningDeposit);
+
+        console.log("FINAL SETTLEMENT HISTORY", {
+            pending: history.pending,
+            deposit: history.deposit,
+            transactions: settlementFees.map((fee) => ({
+                receipt: fee.receipt_number,
+                date: fee.payment_date,
+                due: Number(fee.transaction_total || 0),
+                paid: Number(fee.amount || 0),
+                storedBalance: Number(fee.balance || 0)
+            }))
         });
 
 
@@ -1188,32 +1356,1251 @@ export default function FeeLedger() {
 
     };
 
+    const transactionUuidRef = useRef(null);
 
 
+
+    // const saveLedger = async () => {
+
+    //     // =========================================================
+    //     // PREVENT MULTIPLE SUBMISSIONS
+    //     // =========================================================
+
+    //     if (saving) {
+    //         return;
+    //     }
+
+    //     if (!selectedStudent) {
+
+    //         alert("Select a student");
+
+    //         return;
+
+    //     }
+
+    //     // Lock the save operation immediately.
+    //     // This prevents rapid multiple clicks.
+    //     setSaving(true);
+
+
+    //     try {
+
+    //         const selectedMonths = [];
+
+    //         const feeBreakdown = {
+    //             months: {},
+    //             one_time: {},
+    //             discounts: {},
+    //             totals: {}
+    //         };
+
+    //         let transactionTotal = 0;
+
+
+    //         // =========================================================
+    //         // MONTHLY FEES
+    //         // =========================================================
+
+    //         // The loop works for fee with conditional uniting system logic 
+    //         // academicMonths.forEach((month) => {
+
+    //         //     // Already paid months are ignored
+    //         //     if (ledger[month].paid)
+    //         //         return;
+
+
+    //         //     const tuition =
+    //         //         ledger[month].tuition === ""
+    //         //             ? 0
+    //         //             : Number(ledger[month].tuition);
+
+
+    //         //     const activity =
+    //         //         ledger[month].activity === ""
+    //         //             ? 0
+    //         //             : Number(ledger[month].activity);
+
+
+    //         //     // Skip month if operator entered nothing
+    //         //     if (
+    //         //         ledger[month].tuition === "" &&
+    //         //         ledger[month].activity === ""
+    //         //     ) {
+    //         //         return;
+    //         //     }
+
+
+    //         //     selectedMonths.push(month);
+
+
+    //         //     feeBreakdown.months[month] = {
+    //         //         tuition,
+    //         //         activity,
+    //         //         total: tuition + activity
+    //         //     };
+
+
+    //         //     transactionTotal += tuition + activity;
+
+    //         // });
+
+    //         // The below code use systematic conditional logic to work with.......
+    //         academicMonths.forEach((month) => {
+    //             const row = ledger[month];
+
+    //             const tuition =
+    //                 row.tuition === ""
+    //                     ? 0
+    //                     : Number(row.tuition);
+
+    //             const activity =
+    //                 row.activity === ""
+    //                     ? 0
+    //                     : Number(row.activity);
+
+    //             // Nothing newly entered for this month
+    //             if (tuition === 0 && activity === 0) {
+    //                 return;
+    //             }
+
+    //             selectedMonths.push(month);
+
+    //             feeBreakdown.months[month] = {
+    //                 tuition,
+    //                 activity,
+    //                 total: tuition + activity
+    //             };
+
+    //             transactionTotal += tuition + activity;
+    //         });
+
+
+    //         // =========================================================
+    //         // ONE-TIME FEES
+    //         // =========================================================
+
+    //         transactionTotal +=
+    //             (oneTimeFees.admission === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.admission)) +
+
+    //             (oneTimeFees.annual === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.annual)) +
+
+    //             (oneTimeFees.exam === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.exam)) +
+
+    //             (oneTimeFees.commodities === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.commodities)) +
+
+    //             (oneTimeFees.transport === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.transport)) +
+
+    //             (oneTimeFees.other === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.other));
+
+
+    //         // =========================================================
+    //         // DISCOUNTS / LATE FEE
+    //         // =========================================================
+
+    //         transactionTotal +=
+    //             Number(discounts.lateFee || 0);
+
+
+    //         transactionTotal -=
+    //             Number(discounts.sibling || 0);
+
+
+    //         transactionTotal -=
+    //             Number(discounts.special || 0);
+
+
+    //         // =========================================================
+    //         // BREAKDOWN TOTALS
+    //         // =========================================================
+
+    //         feeBreakdown.totals = {
+
+    //             gross: grossTotal,
+
+    //             current_net: netTotal,
+
+    //             previous_pending: previousPending,
+
+    //             previous_deposit: previousDeposit,
+
+    //             carry_forward: carryForward,
+
+    //             net: adjustedNetTotal,
+
+    //             collected:
+    //                 Number(collectedAmount || 0),
+
+    //             balance:
+    //                 balance
+
+    //         };
+
+
+    //         // =========================================================
+    //         // ONE-TIME FEE BREAKDOWN
+    //         // =========================================================
+
+    //         feeBreakdown.one_time = {
+
+    //             admission:
+    //                 oneTimeFees.admission === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.admission),
+
+    //             annual:
+    //                 oneTimeFees.annual === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.annual),
+
+    //             exam:
+    //                 oneTimeFees.exam === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.exam),
+
+    //             commodities:
+    //                 oneTimeFees.commodities === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.commodities),
+
+    //             transport:
+    //                 oneTimeFees.transport === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.transport),
+
+    //             other:
+    //                 oneTimeFees.other === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.other)
+
+    //         };
+
+
+    //         // =========================================================
+    //         // DISCOUNT BREAKDOWN
+    //         // =========================================================
+
+    //         feeBreakdown.discounts = {
+
+    //             late_fee:
+    //                 Number(discounts.lateFee || 0),
+
+    //             sibling:
+    //                 Number(discounts.sibling || 0),
+
+    //             special:
+    //                 Number(discounts.special || 0)
+
+    //         };
+
+
+    //         // =========================================================
+    //         // PAYLOAD
+    //         // =========================================================
+
+    //         const payload = {
+
+    //             // Unique record ID
+    //             uuid:
+    //                 crypto.randomUUID(),
+
+
+    //             // Student
+    //             student_uuid:
+    //                 selectedStudent.uuid,
+
+
+    //             // ONE transaction UUID for the complete payment
+    //             transaction_uuid:
+    //                 crypto.randomUUID(),
+
+
+    //             // Backend generates receipt number
+    //             receipt_number:
+    //                 "",
+
+
+    //             // Actual collected amount
+    //             amount:
+    //                 Number(collectedAmount),
+
+
+    //             // Remaining balance
+    //             balance:
+    //                 balance,
+
+
+    //             // Late fee
+    //             late_fee:
+    //                 Number(discounts.lateFee || 0),
+
+
+    //             // Payment method
+    //             payment_method:
+    //                 paymentMethod,
+
+
+    //             // Payment date
+    //             payment_date:
+    //                 paymentDate,
+
+
+    //             // First selected month retained for compatibility
+    //             month:
+    //                 selectedMonths[0] || null,
+
+
+    //             // Payment year
+    //             year:
+    //                 new Date(paymentDate).getFullYear(),
+
+
+    //             // IMPORTANT:
+    //             // All selected months remain inside ONE transaction
+    //             selected_months:
+    //                 JSON.stringify(selectedMonths),
+
+
+    //             months_count:
+    //                 selectedMonths.length,
+
+
+    //             // Complete transaction value
+    //             transaction_total:
+    //                 transactionTotal,
+
+
+    //             // Monthly fee included?
+    //             include_monthly:
+    //                 selectedMonths.length > 0
+    //                     ? 1
+    //                     : 0,
+
+
+    //             // One-time fee flags
+    //             include_admission:
+    //                 oneTimeFees.admission !== ""
+    //                     ? 1
+    //                     : 0,
+
+
+    //             include_annual:
+    //                 oneTimeFees.annual !== ""
+    //                     ? 1
+    //                     : 0,
+
+
+    //             include_exam:
+    //                 oneTimeFees.exam !== ""
+    //                     ? 1
+    //                     : 0,
+
+
+    //             include_activity:
+    //                 selectedMonths.some(
+    //                     month =>
+    //                         Number(
+    //                             ledger[month].activity || 0
+    //                         ) > 0
+    //                 )
+    //                     ? 1
+    //                     : 0,
+
+
+    //             include_commodities:
+    //                 oneTimeFees.commodities !== ""
+    //                     ? 1
+    //                     : 0,
+
+
+    //             commodities_fee:
+    //                 oneTimeFees.commodities === ""
+    //                     ? 0
+    //                     : Number(oneTimeFees.commodities),
+
+
+    //             // Student activities
+    //             computer:
+    //                 selectedStudent.computer,
+
+    //             abacus:
+    //                 selectedStudent.abacus,
+
+    //             taekwondo:
+    //                 selectedStudent.taekwondo,
+
+
+    //             // Discounts
+    //             sibling_discount_enabled:
+    //                 Number(discounts.sibling) > 0
+    //                     ? 1
+    //                     : 0,
+
+
+    //             sibling_discount_amount:
+    //                 Number(discounts.sibling || 0),
+
+
+    //             special_discount:
+    //                 Number(discounts.special || 0),
+
+
+    //             // Complete breakdown
+    //             fee_breakdown:
+    //                 JSON.stringify(feeBreakdown),
+
+
+    //             // Ignored fee structure
+    //             ignore_fee_structure:
+    //                 ignoreFeeStructure
+    //                     ? 1
+    //                     : 0,
+
+
+    //             ignored_fee_items:
+    //                 JSON.stringify(ignoredFeeItems),
+
+
+    //             remarks:
+    //                 remarks
+
+    //         };
+
+
+    //         // =========================================================
+    //         // DEBUG LOG
+    //         // =========================================================
+
+    //         console.log(
+    //             "Saving fee transaction:",
+    //             payload.transaction_uuid
+    //         );
+
+    //         console.log(
+    //             "Selected months:",
+    //             selectedMonths
+    //         );
+
+    //         console.log(
+    //             "Payment payload:",
+    //             payload
+    //         );
+
+
+    //         // =========================================================
+    //         // SAVE TO BACKEND
+    //         // =========================================================
+
+    //         const res = await axios.post(
+    //             `${API}/addFee.php`,
+    //             payload
+    //         );
+
+
+    //         // =========================================================
+    //         // RESPONSE
+    //         // =========================================================
+
+    //         if (res.data.status) {
+
+    //             alert("Fee saved successfully");
+
+
+    //             await loadFees();
+
+
+    //             handleStudentSelect(
+    //                 selectedStudent
+    //             );
+
+
+    //         } else {
+
+    //             alert(
+    //                 res.data.message ||
+    //                 "Unable to save fee."
+    //             );
+
+    //         }
+
+
+    //     } catch (err) {
+
+    //         console.error(
+    //             "Fee save error:",
+    //             err
+    //         );
+
+    //         // alert(
+    //         //     "Unable to save fee."
+    //         // );
+
+
+    //     } finally {
+
+    //         // =========================================================
+    //         // UNLOCK AFTER REQUEST FINISHES
+    //         // =========================================================
+
+    //         setSaving(false);
+
+    //     }
+
+    // };
+
+    // const saveLedger = async () => {
+
+    //     // =========================================================
+    //     // PREVENT MULTIPLE SUBMISSIONS
+    //     // =========================================================
+
+    //     if (saving) {
+    //         return;
+    //     }
+
+    //     if (!selectedStudent) {
+    //         alert("Select a student");
+    //         return;
+    //     }
+
+    //     // Lock immediately
+    //     setSaving(true);
+
+    //     try {
+
+    //         // =========================================================
+    //         // CREATE / REUSE TRANSACTION UUID
+    //         // =========================================================
+    //         //
+    //         // IMPORTANT:
+    //         //
+    //         // Do NOT generate a new transaction UUID every retry.
+    //         //
+    //         // If the request reaches PHP successfully but the browser
+    //         // does not receive the response, retrying with the same
+    //         // transaction_uuid allows the backend to recognize it as
+    //         // the same transaction.
+    //         //
+
+    //         if (!transactionUuidRef.current) {
+    //             transactionUuidRef.current = crypto.randomUUID();
+    //         }
+
+    //         const transactionUuid = transactionUuidRef.current;
+
+
+    //         // =========================================================
+    //         // INITIAL DATA
+    //         // =========================================================
+
+    //         const selectedMonths = [];
+
+    //         const feeBreakdown = {
+    //             months: {},
+    //             one_time: {},
+    //             discounts: {},
+    //             totals: {}
+    //         };
+
+    //         let transactionTotal = 0;
+
+
+    //         // =========================================================
+    //         // MONTHLY FEES
+    //         // =========================================================
+
+    //         academicMonths.forEach((month) => {
+
+    //             const row = ledger[month];
+
+    //             if (!row) {
+    //                 return;
+    //             }
+
+    //             const tuition =
+    //                 row.tuition === ""
+    //                     ? 0
+    //                     : Number(row.tuition);
+
+    //             const activity =
+    //                 row.activity === ""
+    //                     ? 0
+    //                     : Number(row.activity);
+
+
+    //             // Nothing newly entered for this month
+    //             if (
+    //                 tuition === 0 &&
+    //                 activity === 0
+    //             ) {
+    //                 return;
+    //             }
+
+
+    //             selectedMonths.push(month);
+
+    //             feeBreakdown.months[month] = {
+    //                 tuition,
+    //                 activity,
+    //                 total: tuition + activity
+    //             };
+
+
+    //             transactionTotal +=
+    //                 tuition + activity;
+
+    //         });
+
+
+    //         // =========================================================
+    //         // DETERMINE WHETHER THIS TRANSACTION HAS MONTHLY FEES
+    //         // =========================================================
+    //         //
+    //         // This must match the backend logic.
+    //         //
+    //         // Tuition OR activity > 0 means monthly fee exists.
+    //         //
+
+    //         const hasMonthlyFee =
+    //             selectedMonths.length > 0;
+
+
+    //         // =========================================================
+    //         // ONE-TIME FEES
+    //         // =========================================================
+
+    //         const admission =
+    //             oneTimeFees.admission === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.admission);
+
+    //         const annual =
+    //             oneTimeFees.annual === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.annual);
+
+    //         const exam =
+    //             oneTimeFees.exam === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.exam);
+
+    //         const commodities =
+    //             oneTimeFees.commodities === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.commodities);
+
+    //         const transport =
+    //             oneTimeFees.transport === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.transport);
+
+    //         const other =
+    //             oneTimeFees.other === ""
+    //                 ? 0
+    //                 : Number(oneTimeFees.other);
+
+
+    //         transactionTotal +=
+    //             admission +
+    //             annual +
+    //             exam +
+    //             commodities +
+    //             transport +
+    //             other;
+
+
+    //         // =========================================================
+    //         // LATE FEE
+    //         // =========================================================
+    //         //
+    //         // Backend rules:
+    //         //
+    //         // 1. ignore_late_fee = true  => late fee = 0
+    //         //
+    //         // 2. No monthly fee            => late fee = 0
+    //         //
+    //         // 3. Monthly fee exists        => supplied late fee allowed
+    //         //
+
+    //         const ignoreLateFee =
+    //             ignoreLateFeeState
+    //                 ? 1
+    //                 : 0;
+
+
+    //         let effectiveLateFee =
+    //             Number(discounts.lateFee || 0);
+
+
+    //         if (
+    //             ignoreLateFee ||
+    //             !hasMonthlyFee
+    //         ) {
+    //             effectiveLateFee = 0;
+    //         }
+
+
+    //         // =========================================================
+    //         // DISCOUNTS / LATE FEE
+    //         // =========================================================
+
+    //         transactionTotal +=
+    //             effectiveLateFee;
+
+
+    //         const siblingDiscount =
+    //             Number(discounts.sibling || 0);
+
+    //         const specialDiscount =
+    //             Number(discounts.special || 0);
+
+
+    //         transactionTotal -=
+    //             siblingDiscount;
+
+    //         transactionTotal -=
+    //             specialDiscount;
+
+
+    //         // =========================================================
+    //         // ONE-TIME FEE BREAKDOWN
+    //         // =========================================================
+
+    //         feeBreakdown.one_time = {
+
+    //             admission,
+
+    //             annual,
+
+    //             exam,
+
+    //             commodities,
+
+    //             transport,
+
+    //             other
+
+    //         };
+
+
+    //         // =========================================================
+    //         // DISCOUNT BREAKDOWN
+    //         // =========================================================
+
+    //         feeBreakdown.discounts = {
+
+    //             late_fee:
+    //                 effectiveLateFee,
+
+    //             sibling:
+    //                 siblingDiscount,
+
+    //             special:
+    //                 specialDiscount
+
+    //         };
+
+
+    //         // =========================================================
+    //         // BREAKDOWN TOTALS
+    //         // =========================================================
+
+    //         feeBreakdown.totals = {
+
+    //             gross:
+    //                 grossTotal,
+
+    //             current_net:
+    //                 netTotal,
+
+    //             previous_pending:
+    //                 previousPending,
+
+    //             previous_deposit:
+    //                 previousDeposit,
+
+    //             carry_forward:
+    //                 carryForward,
+
+    //             net:
+    //                 adjustedNetTotal,
+
+    //             collected:
+    //                 Number(collectedAmount || 0),
+
+    //             balance:
+    //                 Number(balance || 0)
+
+    //         };
+
+
+    //         // =========================================================
+    //         // BASIC FRONTEND VALIDATION
+    //         // =========================================================
+
+    //         const collectedAmountNumber =
+    //             Number(collectedAmount || 0);
+
+    //         if (collectedAmountNumber <= 0) {
+
+    //             alert(
+    //                 "Please enter a valid payment amount."
+    //             );
+
+    //             return;
+    //         }
+
+
+    //         // =========================================================
+    //         // PAYMENT YEAR
+    //         // =========================================================
+    //         //
+    //         // Avoid:
+    //         //
+    //         // new Date("2026-01-01").getFullYear()
+    //         //
+    //         // because YYYY-MM-DD parsing can involve UTC.
+    //         //
+    //         // The backend expects the year associated with the
+    //         // payment_date.
+    //         //
+
+    //         const paymentYear =
+    //             Number(
+    //                 String(paymentDate).slice(0, 4)
+    //             );
+
+
+    //         // =========================================================
+    //         // PAYLOAD
+    //         // =========================================================
+
+    //         const payload = {
+
+    //             // -----------------------------------------------------
+    //             // UNIQUE RECORD UUID
+    //             // -----------------------------------------------------
+    //             //
+    //             // This identifies the individual DB row.
+    //             //
+    //             uuid:
+    //                 crypto.randomUUID(),
+
+
+    //             // -----------------------------------------------------
+    //             // STUDENT
+    //             // -----------------------------------------------------
+
+    //             student_uuid:
+    //                 selectedStudent.uuid,
+
+
+    //             // -----------------------------------------------------
+    //             // TRANSACTION UUID
+    //             // -----------------------------------------------------
+    //             //
+    //             // IMPORTANT:
+    //             // Reused for the lifetime of this save attempt.
+    //             //
+
+    //             transaction_uuid:
+    //                 transactionUuid,
+
+
+    //             // -----------------------------------------------------
+    //             // RECEIPT
+    //             // -----------------------------------------------------
+    //             //
+    //             // Empty means PHP generates it.
+    //             //
+
+    //             receipt_number:
+    //                 "",
+
+
+    //             // -----------------------------------------------------
+    //             // PAYMENT AMOUNT
+    //             // -----------------------------------------------------
+
+    //             amount:
+    //                 collectedAmountNumber,
+
+
+    //             // -----------------------------------------------------
+    //             // BALANCE
+    //             // -----------------------------------------------------
+
+    //             balance:
+    //                 Number(balance || 0),
+
+
+    //             // -----------------------------------------------------
+    //             // LATE FEE
+    //             // -----------------------------------------------------
+
+    //             late_fee:
+    //                 effectiveLateFee,
+
+
+    //             // -----------------------------------------------------
+    //             // IMPORTANT:
+    //             // Tell backend whether late fee is ignored.
+    //             // -----------------------------------------------------
+
+    //             ignore_late_fee:
+    //                 ignoreLateFee,
+
+
+    //             // -----------------------------------------------------
+    //             // PAYMENT METHOD
+    //             // -----------------------------------------------------
+
+    //             payment_method:
+    //                 paymentMethod,
+
+
+    //             // -----------------------------------------------------
+    //             // PAYMENT DATE
+    //             // -----------------------------------------------------
+
+    //             payment_date:
+    //                 paymentDate,
+
+
+    //             // -----------------------------------------------------
+    //             // COMPATIBILITY MONTH
+    //             // -----------------------------------------------------
+
+    //             month:
+    //                 selectedMonths[0] || null,
+
+
+    //             // -----------------------------------------------------
+    //             // PAYMENT YEAR
+    //             // -----------------------------------------------------
+
+    //             year:
+    //                 paymentYear,
+
+
+    //             // -----------------------------------------------------
+    //             // SELECTED MONTHS
+    //             // -----------------------------------------------------
+
+    //             selected_months:
+    //                 JSON.stringify(selectedMonths),
+
+    //             months_count:
+    //                 selectedMonths.length,
+
+
+    //             // -----------------------------------------------------
+    //             // TRANSACTION TOTAL
+    //             // -----------------------------------------------------
+
+    //             transaction_total:
+    //                 transactionTotal,
+
+
+    //             // -----------------------------------------------------
+    //             // MONTHLY FLAG
+    //             // -----------------------------------------------------
+
+    //             include_monthly:
+    //                 hasMonthlyFee
+    //                     ? 1
+    //                     : 0,
+
+
+    //             // -----------------------------------------------------
+    //             // ONE-TIME FLAGS
+    //             // -----------------------------------------------------
+
+    //             include_admission:
+    //                 admission > 0
+    //                     ? 1
+    //                     : 0,
+
+    //             include_annual:
+    //                 annual > 0
+    //                     ? 1
+    //                     : 0,
+
+    //             include_exam:
+    //                 exam > 0
+    //                     ? 1
+    //                     : 0,
+
+
+    //             // -----------------------------------------------------
+    //             // ACTIVITY FLAG
+    //             // -----------------------------------------------------
+
+    //             include_activity:
+    //                 selectedMonths.some(
+    //                     (month) =>
+    //                         Number(
+    //                             ledger[month]?.activity || 0
+    //                         ) > 0
+    //                 )
+    //                     ? 1
+    //                     : 0,
+
+
+    //             // -----------------------------------------------------
+    //             // COMMODITIES
+    //             // -----------------------------------------------------
+
+    //             include_commodities:
+    //                 commodities > 0
+    //                     ? 1
+    //                     : 0,
+
+    //             commodities_fee:
+    //                 commodities,
+
+
+    //             // -----------------------------------------------------
+    //             // STUDENT ACTIVITIES
+    //             // -----------------------------------------------------
+
+    //             computer:
+    //                 Number(selectedStudent.computer || 0),
+
+    //             abacus:
+    //                 Number(selectedStudent.abacus || 0),
+
+    //             taekwondo:
+    //                 Number(selectedStudent.taekwondo || 0),
+
+
+    //             // -----------------------------------------------------
+    //             // SIBLING DISCOUNT
+    //             // -----------------------------------------------------
+
+    //             sibling_discount_enabled:
+    //                 siblingDiscount > 0
+    //                     ? 1
+    //                     : 0,
+
+    //             sibling_discount_amount:
+    //                 siblingDiscount,
+
+
+    //             // -----------------------------------------------------
+    //             // SPECIAL DISCOUNT
+    //             // -----------------------------------------------------
+
+    //             special_discount:
+    //                 specialDiscount,
+
+
+    //             // -----------------------------------------------------
+    //             // COMPLETE BREAKDOWN
+    //             // -----------------------------------------------------
+
+    //             fee_breakdown:
+    //                 JSON.stringify(feeBreakdown),
+
+
+    //             // -----------------------------------------------------
+    //             // FEE STRUCTURE
+    //             // -----------------------------------------------------
+
+    //             ignore_fee_structure:
+    //                 ignoreFeeStructure
+    //                     ? 1
+    //                     : 0,
+
+    //             ignored_fee_items:
+    //                 JSON.stringify(
+    //                     ignoredFeeItems || []
+    //                 ),
+
+
+    //             // -----------------------------------------------------
+    //             // REMARKS
+    //             // -----------------------------------------------------
+
+    //             remarks:
+    //                 remarks || null
+
+    //         };
+
+
+    //         // =========================================================
+    //         // DEBUG
+    //         // =========================================================
+
+    //         console.log(
+    //             "Saving fee transaction:",
+    //             transactionUuid
+    //         );
+
+    //         console.log(
+    //             "Selected months:",
+    //             selectedMonths
+    //         );
+
+    //         console.log(
+    //             "Has monthly fee:",
+    //             hasMonthlyFee
+    //         );
+
+    //         console.log(
+    //             "Ignore late fee:",
+    //             ignoreLateFee
+    //         );
+
+    //         console.log(
+    //             "Effective late fee:",
+    //             effectiveLateFee
+    //         );
+
+    //         console.log(
+    //             "Transaction total:",
+    //             transactionTotal
+    //         );
+
+    //         console.log(
+    //             "Payment payload:",
+    //             payload
+    //         );
+
+
+    //         // =========================================================
+    //         // SAVE TO BACKEND
+    //         // =========================================================
+
+    //         const res = await axios.post(
+    //             `${API}/addFee.php`,
+    //             payload
+    //         );
+
+
+    //         // =========================================================
+    //         // RESPONSE
+    //         // =========================================================
+
+    //         if (res.data.status) {
+
+    //             alert(
+    //                 res.data.message ||
+    //                 "Fee saved successfully"
+    //             );
+
+
+    //             // =====================================================
+    //             // IMPORTANT:
+    //             // Transaction is now successfully saved.
+    //             //
+    //             // Clear the transaction UUID so the NEXT payment
+    //             // gets a completely new transaction UUID.
+    //             // =====================================================
+
+    //             transactionUuidRef.current = null;
+
+
+    //             await loadFees();
+
+    //             handleStudentSelect(
+    //                 selectedStudent
+    //             );
+
+
+    //         } else {
+
+    //             alert(
+    //                 res.data.message ||
+    //                 "Unable to save fee."
+    //             );
+
+    //         }
+
+
+    //     } catch (err) {
+
+    //         console.error(
+    //             "Fee save error:",
+    //             err
+    //         );
+
+
+    //         /*
+    //          * DO NOT clear transactionUuidRef here.
+    //          *
+    //          * If the request reached the backend but the response
+    //          * was lost, the user can retry and the same
+    //          * transaction_uuid will allow the backend to detect the
+    //          * already-saved transaction.
+    //          */
+
+    //         alert(
+    //             err?.response?.data?.message ||
+    //             "Unable to save fee. Please try again."
+    //         );
+
+
+    //     } finally {
+
+    //         // =========================================================
+    //         // UNLOCK AFTER REQUEST FINISHES
+    //         // =========================================================
+
+    //         setSaving(false);
+
+    //     }
+    // };
+
+    // Above one fails due to bad code push one
     const saveLedger = async () => {
-
         // =========================================================
         // PREVENT MULTIPLE SUBMISSIONS
         // =========================================================
-
         if (saving) {
             return;
         }
 
         if (!selectedStudent) {
-
             alert("Select a student");
-
             return;
-
         }
 
-        // Lock the save operation immediately.
-        // This prevents rapid multiple clicks.
         setSaving(true);
 
-
         try {
+            // =========================================================
+            // CREATE / REUSE TRANSACTION UUID
+            // =========================================================
+            //
+            // IMPORTANT:
+            // Do NOT generate a new transaction UUID on retry.
+            //
+            // If PHP saves successfully but browser does not receive
+            // response, retrying with same transaction_uuid lets backend
+            // identify it as the same transaction.
+            //
+            if (!transactionUuidRef.current) {
+                transactionUuidRef.current = crypto.randomUUID();
+            }
+
+            const transactionUuid =
+                transactionUuidRef.current;
+
+            // =========================================================
+            // INITIAL DATA
+            // =========================================================
 
             const selectedMonths = [];
 
@@ -1226,57 +2613,16 @@ export default function FeeLedger() {
 
             let transactionTotal = 0;
 
-
             // =========================================================
             // MONTHLY FEES
             // =========================================================
 
-            // The loop works for fee with conditional uniting system logic 
-            // academicMonths.forEach((month) => {
-
-            //     // Already paid months are ignored
-            //     if (ledger[month].paid)
-            //         return;
-
-
-            //     const tuition =
-            //         ledger[month].tuition === ""
-            //             ? 0
-            //             : Number(ledger[month].tuition);
-
-
-            //     const activity =
-            //         ledger[month].activity === ""
-            //             ? 0
-            //             : Number(ledger[month].activity);
-
-
-            //     // Skip month if operator entered nothing
-            //     if (
-            //         ledger[month].tuition === "" &&
-            //         ledger[month].activity === ""
-            //     ) {
-            //         return;
-            //     }
-
-
-            //     selectedMonths.push(month);
-
-
-            //     feeBreakdown.months[month] = {
-            //         tuition,
-            //         activity,
-            //         total: tuition + activity
-            //     };
-
-
-            //     transactionTotal += tuition + activity;
-
-            // });
-
-            // The below code use systematic conditional logic to work with.......
             academicMonths.forEach((month) => {
                 const row = ledger[month];
+
+                if (!row) {
+                    return;
+                }
 
                 const tuition =
                     row.tuition === ""
@@ -1289,7 +2635,10 @@ export default function FeeLedger() {
                         : Number(row.activity);
 
                 // Nothing newly entered for this month
-                if (tuition === 0 && activity === 0) {
+                if (
+                    tuition === 0 &&
+                    activity === 0
+                ) {
                     return;
                 }
 
@@ -1301,332 +2650,678 @@ export default function FeeLedger() {
                     total: tuition + activity
                 };
 
-                transactionTotal += tuition + activity;
+                transactionTotal +=
+                    tuition + activity;
             });
 
+            // =========================================================
+            // MONTHLY FEE FLAG
+            // =========================================================
+
+            const hasMonthlyFee =
+                selectedMonths.length > 0;
 
             // =========================================================
             // ONE-TIME FEES
             // =========================================================
 
+            const admission =
+                oneTimeFees.admission === ""
+                    ? 0
+                    : Number(oneTimeFees.admission);
+
+            const annual =
+                oneTimeFees.annual === ""
+                    ? 0
+                    : Number(oneTimeFees.annual);
+
+            const exam =
+                oneTimeFees.exam === ""
+                    ? 0
+                    : Number(oneTimeFees.exam);
+
+            const commodities =
+                oneTimeFees.commodities === ""
+                    ? 0
+                    : Number(oneTimeFees.commodities);
+
+            const transport =
+                oneTimeFees.transport === ""
+                    ? 0
+                    : Number(oneTimeFees.transport);
+
+            const other =
+                oneTimeFees.other === ""
+                    ? 0
+                    : Number(oneTimeFees.other);
+
             transactionTotal +=
-                (oneTimeFees.admission === ""
-                    ? 0
-                    : Number(oneTimeFees.admission)) +
-
-                (oneTimeFees.annual === ""
-                    ? 0
-                    : Number(oneTimeFees.annual)) +
-
-                (oneTimeFees.exam === ""
-                    ? 0
-                    : Number(oneTimeFees.exam)) +
-
-                (oneTimeFees.commodities === ""
-                    ? 0
-                    : Number(oneTimeFees.commodities)) +
-
-                (oneTimeFees.transport === ""
-                    ? 0
-                    : Number(oneTimeFees.transport)) +
-
-                (oneTimeFees.other === ""
-                    ? 0
-                    : Number(oneTimeFees.other));
-
+                admission +
+                annual +
+                exam +
+                commodities +
+                transport +
+                other;
 
             // =========================================================
-            // DISCOUNTS / LATE FEE
+            // LATE FEE
             // =========================================================
 
-            transactionTotal +=
+            const ignoreLateFee =
+                ignoreLateFeeState
+                    ? 1
+                    : 0;
+
+            let effectiveLateFee =
                 Number(discounts.lateFee || 0);
 
+            // Backend rules:
+            //
+            // ignore_late_fee = 1 => late fee 0
+            // no monthly fee    => late fee 0
+            //
+            if (
+                ignoreLateFee ||
+                !hasMonthlyFee
+            ) {
+                effectiveLateFee = 0;
+            }
 
-            transactionTotal -=
+            transactionTotal +=
+                effectiveLateFee;
+
+            // =========================================================
+            // DISCOUNTS
+            // =========================================================
+
+            const siblingDiscount =
                 Number(discounts.sibling || 0);
 
-
-            transactionTotal -=
+            const specialDiscount =
                 Number(discounts.special || 0);
 
+            transactionTotal -=
+                siblingDiscount;
+
+            transactionTotal -=
+                specialDiscount;
+
+            // Never allow current transaction total below zero
+            transactionTotal = Math.max(
+                0,
+                transactionTotal
+            );
 
             // =========================================================
-            // BREAKDOWN TOTALS
-            // =========================================================
-
-            feeBreakdown.totals = {
-
-                gross: grossTotal,
-
-                current_net: netTotal,
-
-                previous_pending: previousPending,
-
-                previous_deposit: previousDeposit,
-
-                carry_forward: carryForward,
-
-                net: adjustedNetTotal,
-
-                collected:
-                    Number(collectedAmount || 0),
-
-                balance:
-                    balance
-
-            };
-
-
-            // =========================================================
-            // ONE-TIME FEE BREAKDOWN
+            // ONE-TIME BREAKDOWN
             // =========================================================
 
             feeBreakdown.one_time = {
-
-                admission:
-                    oneTimeFees.admission === ""
-                        ? 0
-                        : Number(oneTimeFees.admission),
-
-                annual:
-                    oneTimeFees.annual === ""
-                        ? 0
-                        : Number(oneTimeFees.annual),
-
-                exam:
-                    oneTimeFees.exam === ""
-                        ? 0
-                        : Number(oneTimeFees.exam),
-
-                commodities:
-                    oneTimeFees.commodities === ""
-                        ? 0
-                        : Number(oneTimeFees.commodities),
-
-                transport:
-                    oneTimeFees.transport === ""
-                        ? 0
-                        : Number(oneTimeFees.transport),
-
-                other:
-                    oneTimeFees.other === ""
-                        ? 0
-                        : Number(oneTimeFees.other)
-
+                admission,
+                annual,
+                exam,
+                commodities,
+                transport,
+                other
             };
-
 
             // =========================================================
             // DISCOUNT BREAKDOWN
             // =========================================================
 
             feeBreakdown.discounts = {
-
-                late_fee:
-                    Number(discounts.lateFee || 0),
-
-                sibling:
-                    Number(discounts.sibling || 0),
-
-                special:
-                    Number(discounts.special || 0)
-
+                late_fee: effectiveLateFee,
+                sibling: siblingDiscount,
+                special: specialDiscount
             };
 
+            // =========================================================
+            // CURRENT PAYMENT
+            // =========================================================
+
+            const collectedAmountNumber =
+                Number(collectedAmount || 0);
+
+            if (
+                !Number.isFinite(collectedAmountNumber) ||
+                collectedAmountNumber <= 0
+            ) {
+                alert(
+                    "Please enter a valid payment amount."
+                );
+                return;
+            }
+
+            // =========================================================
+            // PREVIOUS SETTLEMENT
+            // =========================================================
+            //
+            // paymentHistory comes from handleStudentSelect().
+            //
+            // previousPending:
+            //     old unpaid amount
+            //
+            // previousDeposit:
+            //     old genuine excess payment
+            //
+            const oldPending =
+                Math.max(
+                    0,
+                    Number(previousPending || 0)
+                );
+
+            const oldDeposit =
+                Math.max(
+                    0,
+                    Number(previousDeposit || 0)
+                );
+
+            // =========================================================
+            // CURRENT NET
+            // =========================================================
+            //
+            // This is ONLY the current transaction's fee.
+            //
+            const currentNet =
+                Math.max(
+                    0,
+                    Number(netTotal || 0)
+                );
+
+            // =========================================================
+            // TOTAL AMOUNT THAT NEEDS TO BE SETTLED
+            // =========================================================
+            //
+            // Example:
+            //
+            // Previous pending = 300
+            // Current fee      = 300
+            // Previous deposit = 0
+            //
+            // Total due = 600
+            //
+            const totalDue =
+                Math.max(
+                    0,
+                    currentNet +
+                    oldPending -
+                    oldDeposit
+                );
+
+            // =========================================================
+            // CURRENT BALANCE
+            // =========================================================
+
+            const finalBalance =
+                Math.max(
+                    0,
+                    totalDue -
+                    collectedAmountNumber
+                );
+
+            // =========================================================
+            // CURRENT GENUINE DEPOSIT
+            // =========================================================
+            //
+            // Only amount above the TOTAL outstanding amount
+            // becomes a deposit.
+            //
+            const actualDeposit =
+                Math.max(
+                    0,
+                    collectedAmountNumber -
+                    totalDue
+                );
+
+            // =========================================================
+            // CURRENT PAYMENT ALLOCATION
+            // =========================================================
+            //
+            // Useful for frontend debugging / receipt breakdown.
+            //
+            let paymentRemaining =
+                collectedAmountNumber;
+
+            // First consume previous pending
+            const pendingUsed =
+                Math.min(
+                    oldPending,
+                    paymentRemaining
+                );
+
+            paymentRemaining -=
+                pendingUsed;
+
+            // Then pay current fee
+            const currentFeePaid =
+                Math.min(
+                    currentNet,
+                    paymentRemaining
+                );
+
+            paymentRemaining -=
+                currentFeePaid;
+
+            // Anything left is deposit
+            const depositCreated =
+                Math.max(
+                    0,
+                    paymentRemaining
+                );
+
+            const pendingRemaining =
+                Math.max(
+                    0,
+                    oldPending -
+                    pendingUsed
+                );
+
+            const currentFeeRemaining =
+                Math.max(
+                    0,
+                    currentNet -
+                    currentFeePaid
+                );
+
+            // =========================================================
+            // FINAL SETTLEMENT STATE
+            // =========================================================
+
+            const finalPending =
+                Math.max(
+                    0,
+                    pendingRemaining +
+                    currentFeeRemaining
+                );
+
+            const finalDeposit =
+                Math.max(
+                    0,
+                    oldDeposit +
+                    depositCreated -
+                    Math.min(
+                        oldDeposit,
+                        currentNet
+                    )
+                );
+
+            // =========================================================
+            // BREAKDOWN TOTALS
+            // =========================================================
+
+            feeBreakdown.totals = {
+                // Current fee only
+                gross:
+                    Number(grossTotal || 0),
+
+                current_net:
+                    currentNet,
+
+                // Previous account position
+                previous_pending:
+                    oldPending,
+
+                previous_deposit:
+                    oldDeposit,
+
+                // Net carry-forward from previous account
+                carry_forward:
+                    oldPending -
+                    oldDeposit,
+
+                // Total amount that should be settled
+                net:
+                    totalDue,
+
+                // Actual money received now
+                collected:
+                    collectedAmountNumber,
+
+                // Remaining unpaid amount after this payment
+                balance:
+                    finalBalance,
+
+                // New genuine deposit created by this payment
+                deposit:
+                    actualDeposit,
+
+                // Detailed allocation
+                pending_used:
+                    pendingUsed,
+
+                current_fee_paid:
+                    currentFeePaid,
+
+                current_fee_remaining:
+                    currentFeeRemaining,
+
+                deposit_created:
+                    depositCreated,
+
+                final_pending:
+                    finalPending,
+
+                final_deposit:
+                    finalDeposit
+            };
+
+            // =========================================================
+            // PAYMENT YEAR
+            // =========================================================
+
+            const paymentYear =
+                Number(
+                    String(paymentDate).slice(0, 4)
+                );
 
             // =========================================================
             // PAYLOAD
             // =========================================================
 
             const payload = {
-
-                // Unique record ID
+                // -----------------------------------------------------
+                // UNIQUE DB ROW UUID
+                // -----------------------------------------------------
                 uuid:
                     crypto.randomUUID(),
 
-
-                // Student
+                // -----------------------------------------------------
+                // STUDENT
+                // -----------------------------------------------------
                 student_uuid:
                     selectedStudent.uuid,
 
-
-                // ONE transaction UUID for the complete payment
+                // -----------------------------------------------------
+                // TRANSACTION UUID
+                // -----------------------------------------------------
                 transaction_uuid:
-                    crypto.randomUUID(),
+                    transactionUuid,
 
-
-                // Backend generates receipt number
+                // -----------------------------------------------------
+                // RECEIPT
+                // -----------------------------------------------------
                 receipt_number:
                     "",
 
-
-                // Actual collected amount
+                // -----------------------------------------------------
+                // ACTUAL MONEY COLLECTED
+                // -----------------------------------------------------
                 amount:
-                    Number(collectedAmount),
+                    collectedAmountNumber,
 
-
-                // Remaining balance
+                // -----------------------------------------------------
+                // FRONTEND CALCULATED BALANCE
+                // -----------------------------------------------------
+                //
+                // Backend MUST recalculate this.
+                //
                 balance:
-                    balance,
+                    finalBalance,
 
-
-                // Late fee
+                // -----------------------------------------------------
+                // LATE FEE
+                // -----------------------------------------------------
                 late_fee:
-                    Number(discounts.lateFee || 0),
+                    effectiveLateFee,
 
+                ignore_late_fee:
+                    ignoreLateFee,
 
-                // Payment method
+                // -----------------------------------------------------
+                // PAYMENT DETAILS
+                // -----------------------------------------------------
                 payment_method:
                     paymentMethod,
 
-
-                // Payment date
                 payment_date:
                     paymentDate,
 
-
-                // First selected month retained for compatibility
+                // -----------------------------------------------------
+                // COMPATIBILITY MONTH
+                // -----------------------------------------------------
                 month:
                     selectedMonths[0] || null,
 
-
-                // Payment year
                 year:
-                    new Date(paymentDate).getFullYear(),
+                    paymentYear,
 
-
-                // IMPORTANT:
-                // All selected months remain inside ONE transaction
+                // -----------------------------------------------------
+                // SELECTED MONTHS
+                // -----------------------------------------------------
                 selected_months:
-                    JSON.stringify(selectedMonths),
-
+                    JSON.stringify(
+                        selectedMonths
+                    ),
 
                 months_count:
                     selectedMonths.length,
 
-
-                // Complete transaction value
+                // -----------------------------------------------------
+                // CURRENT TRANSACTION TOTAL
+                // -----------------------------------------------------
+                //
+                // IMPORTANT:
+                // This is current fee only.
+                // Previous pending/deposit are settlement data,
+                // not part of current transaction_total.
+                //
                 transaction_total:
                     transactionTotal,
 
-
-                // Monthly fee included?
+                // -----------------------------------------------------
+                // MONTHLY FLAG
+                // -----------------------------------------------------
                 include_monthly:
-                    selectedMonths.length > 0
+                    hasMonthlyFee
                         ? 1
                         : 0,
 
-
-                // One-time fee flags
+                // -----------------------------------------------------
+                // ONE-TIME FLAGS
+                // -----------------------------------------------------
                 include_admission:
-                    oneTimeFees.admission !== ""
+                    admission > 0
                         ? 1
                         : 0,
-
 
                 include_annual:
-                    oneTimeFees.annual !== ""
+                    annual > 0
                         ? 1
                         : 0,
-
 
                 include_exam:
-                    oneTimeFees.exam !== ""
+                    exam > 0
                         ? 1
                         : 0,
 
-
+                // -----------------------------------------------------
+                // ACTIVITY FLAG
+                // -----------------------------------------------------
                 include_activity:
                     selectedMonths.some(
-                        month =>
+                        (month) =>
                             Number(
-                                ledger[month].activity || 0
+                                ledger[month]?.activity || 0
                             ) > 0
                     )
                         ? 1
                         : 0,
 
-
+                // -----------------------------------------------------
+                // COMMODITIES
+                // -----------------------------------------------------
                 include_commodities:
-                    oneTimeFees.commodities !== ""
+                    commodities > 0
                         ? 1
                         : 0,
-
 
                 commodities_fee:
-                    oneTimeFees.commodities === ""
-                        ? 0
-                        : Number(oneTimeFees.commodities),
+                    commodities,
 
-
-                // Student activities
+                // -----------------------------------------------------
+                // STUDENT ACTIVITIES
+                // -----------------------------------------------------
                 computer:
-                    selectedStudent.computer,
+                    Number(
+                        selectedStudent.computer || 0
+                    ),
 
                 abacus:
-                    selectedStudent.abacus,
+                    Number(
+                        selectedStudent.abacus || 0
+                    ),
 
                 taekwondo:
-                    selectedStudent.taekwondo,
+                    Number(
+                        selectedStudent.taekwondo || 0
+                    ),
 
-
-                // Discounts
+                // -----------------------------------------------------
+                // SIBLING DISCOUNT
+                // -----------------------------------------------------
                 sibling_discount_enabled:
-                    Number(discounts.sibling) > 0
+                    siblingDiscount > 0
                         ? 1
                         : 0,
 
-
                 sibling_discount_amount:
-                    Number(discounts.sibling || 0),
+                    siblingDiscount,
 
-
+                // -----------------------------------------------------
+                // SPECIAL DISCOUNT
+                // -----------------------------------------------------
                 special_discount:
-                    Number(discounts.special || 0),
+                    specialDiscount,
 
-
-                // Complete breakdown
+                // -----------------------------------------------------
+                // COMPLETE BREAKDOWN
+                // -----------------------------------------------------
                 fee_breakdown:
-                    JSON.stringify(feeBreakdown),
+                    JSON.stringify(
+                        feeBreakdown
+                    ),
 
-
-                // Ignored fee structure
+                // -----------------------------------------------------
+                // FEE STRUCTURE
+                // -----------------------------------------------------
                 ignore_fee_structure:
                     ignoreFeeStructure
                         ? 1
                         : 0,
 
-
                 ignored_fee_items:
-                    JSON.stringify(ignoredFeeItems),
+                    JSON.stringify(
+                        ignoredFeeItems || []
+                    ),
 
-
+                // -----------------------------------------------------
+                // REMARKS
+                // -----------------------------------------------------
                 remarks:
-                    remarks
-
+                    remarks || null
             };
 
-
             // =========================================================
-            // DEBUG LOG
+            // DEBUG
             // =========================================================
 
             console.log(
-                "Saving fee transaction:",
-                payload.transaction_uuid
+                "========== SAVE FEE DEBUG =========="
             );
 
             console.log(
-                "Selected months:",
+                "Student:",
+                selectedStudent.uuid
+            );
+
+            console.log(
+                "Transaction UUID:",
+                transactionUuid
+            );
+
+            console.log(
+                "Selected Months:",
                 selectedMonths
             );
 
             console.log(
-                "Payment payload:",
+                "Current Gross:",
+                grossTotal
+            );
+
+            console.log(
+                "Current Net:",
+                currentNet
+            );
+
+            console.log(
+                "Previous Pending:",
+                oldPending
+            );
+
+            console.log(
+                "Previous Deposit:",
+                oldDeposit
+            );
+
+            console.log(
+                "Total Due:",
+                totalDue
+            );
+
+            console.log(
+                "Collected:",
+                collectedAmountNumber
+            );
+
+            console.log(
+                "Pending Used:",
+                pendingUsed
+            );
+
+            console.log(
+                "Current Fee Paid:",
+                currentFeePaid
+            );
+
+            console.log(
+                "Current Fee Remaining:",
+                currentFeeRemaining
+            );
+
+            console.log(
+                "Deposit Created:",
+                depositCreated
+            );
+
+            console.log(
+                "Final Pending:",
+                finalPending
+            );
+
+            console.log(
+                "Final Deposit:",
+                finalDeposit
+            );
+
+            console.log(
+                "Final Balance:",
+                finalBalance
+            );
+
+            console.log(
+                "Transaction Total:",
+                transactionTotal
+            );
+
+            console.log(
+                "Payment Payload:",
                 payload
             );
 
+            console.log(
+                "===================================="
+            );
 
             // =========================================================
             // SAVE TO BACKEND
@@ -1637,90 +3332,401 @@ export default function FeeLedger() {
                 payload
             );
 
-
             // =========================================================
             // RESPONSE
             // =========================================================
 
             if (res.data.status) {
+                alert(
+                    res.data.message ||
+                    "Fee saved successfully"
+                );
 
-                alert("Fee saved successfully");
-
+                // =====================================================
+                // SUCCESS
+                // =====================================================
+                //
+                // Clear transaction UUID only after successful save.
+                //
+                transactionUuidRef.current = null;
 
                 await loadFees();
-
 
                 handleStudentSelect(
                     selectedStudent
                 );
 
-
             } else {
-
                 alert(
                     res.data.message ||
                     "Unable to save fee."
                 );
-
             }
 
-
         } catch (err) {
-
             console.error(
                 "Fee save error:",
                 err
             );
 
-            // alert(
-            //     "Unable to save fee."
-            // );
+            // =========================================================
+            // IMPORTANT:
+            // DO NOT clear transactionUuidRef here.
+            //
+            // If backend saved the transaction but response was lost,
+            // retrying with same transaction_uuid lets backend detect
+            // duplicate transaction safely.
+            // =========================================================
 
+            alert(
+                err?.response?.data?.message ||
+                "Unable to save fee. Please try again."
+            );
 
         } finally {
-
-            // =========================================================
-            // UNLOCK AFTER REQUEST FINISHES
-            // =========================================================
-
             setSaving(false);
-
         }
-
     };
 
 
+    // const saveEditedFee = async () => {
+
+    //     try {
+
+    //         const selectedMonths = [];
+
+    //         const breakdown = JSON.parse(
+    //             editingFee.fee_breakdown || "{}"
+    //         );
+
+
+
+    //         const feeBreakdown = {
+    //             months: {},
+    //             one_time: {},
+    //             discounts: {},
+    //             totals: {}
+    //         };
+
+    //         let transactionTotal = 0;
+
+    //         academicMonths.forEach((month) => {
+
+    //             if (!editReceipt.months[month]?.checked)
+    //                 return;
+
+    //             const tuition =
+    //                 Number(editReceipt.months?.[month]?.tuition || 0);
+
+    //             const activity =
+    //                 Number(editReceipt.months?.[month]?.activity || 0);
+
+    //             selectedMonths.push(month);
+
+    //             feeBreakdown.months[month] = {
+    //                 tuition,
+    //                 activity,
+    //                 total: tuition + activity
+    //             };
+
+    //             feeBreakdown.one_time = {
+
+    //                 admission: Number(editReceipt.admission_fee || 0),
+    //                 annual: Number(editReceipt.annual_fee || 0),
+    //                 exam: Number(editReceipt.exam_fee || 0),
+    //                 commodities: Number(editReceipt.commodities_fee || 0),
+    //                 transport: Number(editReceipt.transport_fee || 0),
+    //                 other: Number(editReceipt.other_fee || 0)
+
+    //             };
+
+    //             feeBreakdown.discounts = {
+
+    //                 late_fee: Number(editReceipt.late_fee || 0),
+    //                 sibling: Number(editReceipt.sibling_discount_amount || 0),
+    //                 special: Number(editReceipt.special_discount || 0)
+
+    //             };
+
+    //             feeBreakdown.totals = {
+
+    //                 collected: Number(editReceipt.amount || 0),
+    //                 balance: Number(editReceipt.balance || 0),
+    //                 gross: transactionTotal,
+    //                 net:
+    //                     transactionTotal -
+    //                     Number(editReceipt.sibling_discount_amount || 0) -
+    //                     Number(editReceipt.special_discount || 0)
+
+    //             };
+
+    //             transactionTotal += tuition + activity;
+
+    //         });
+
+    //         transactionTotal +=
+    //             Number(editReceipt.admission_fee || 0) +
+    //             Number(editReceipt.annual_fee || 0) +
+    //             Number(editReceipt.exam_fee || 0) +
+    //             Number(editReceipt.commodities_fee || 0) +
+    //             Number(editReceipt.transport_fee || 0) +
+    //             Number(editReceipt.other_fee || 0);
+
+    //         transactionTotal += Number(editReceipt.late_fee || 0);
+
+    //         transactionTotal -= Number(editReceipt.sibling_discount_amount || 0);
+
+    //         transactionTotal -= Number(editReceipt.special_discount || 0);
+
+    //         setOneTimeFees({
+    //             admission: breakdown.one_time?.admission || 0,
+    //             annual: breakdown.one_time?.annual || 0,
+    //             exam: breakdown.one_time?.exam || 0,
+    //             commodities: breakdown.one_time?.commodities || 0,
+    //             transport: breakdown.one_time?.transport || 0,
+    //             other: breakdown.one_time?.other || 0,
+    //         });
+
+    //         setDiscounts({
+    //             lateFee: breakdown.discounts?.late_fee || 0,
+    //             sibling: breakdown.discounts?.sibling || 0,
+    //             special: breakdown.discounts?.special || 0,
+    //         });
+
+    //         setCollectedAmount(breakdown.totals?.collected || 0);
+
+    //         // academicMonths.forEach(month => {
+
+    //         //     const monthData = breakdown.months?.[month] || {};
+
+    //         //     months[month] = {
+
+    //         //         checked: selectedMonths.includes(month),
+
+    //         //         tuition: monthData.tuition || 0,
+
+    //         //         activity: monthData.activity || 0,
+
+    //         //         total: monthData.total || 0
+
+    //         //     };
+
+    //         // });
+
+    //         const payload = {
+
+    //             uuid: editReceipt.uuid,
+
+    //             payment_date: editReceipt.payment_date,
+
+    //             payment_method: editReceipt.payment_method,
+
+    //             amount: editReceipt.amount,
+
+    //             balance: editTotals.balance,
+
+    //             remarks: editReceipt.remarks,
+
+    //             selected_months: selectedMonths,
+
+    //             added_months: editReceipt.addedMonths || [],
+
+    //             removed_months: editReceipt.removedMonths || [],
+
+    //             transaction_total: editTotals.net,
+
+    //             months_count: selectedMonths.length,
+
+    //             include_monthly: 1,
+
+    //             include_admission:
+    //                 Number(editReceipt.admission_fee) > 0 ? 1 : 0,
+
+    //             include_annual:
+    //                 Number(editReceipt.annual_fee) > 0 ? 1 : 0,
+
+    //             include_exam:
+    //                 Number(editReceipt.exam_fee) > 0 ? 1 : 0,
+
+    //             include_activity: 1,
+
+    //             include_commodities:
+    //                 Number(editReceipt.commodities_fee) > 0 ? 1 : 0,
+
+    //             commodities_fee:
+    //                 Number(editReceipt.commodities_fee || 0),
+
+    //             computer: editReceipt.computer,
+
+    //             abacus: editReceipt.abacus,
+
+    //             taekwondo: editReceipt.taekwondo,
+
+    //             late_fee:
+    //                 Number(editReceipt.late_fee || 0),
+
+    //             sibling_discount_enabled:
+    //                 Number(editReceipt.sibling_discount_amount || 0) > 0 ? 1 : 0,
+
+    //             sibling_discount_amount:
+    //                 Number(editReceipt.sibling_discount_amount || 0),
+
+    //             special_discount:
+    //                 Number(editReceipt.special_discount || 0),
+
+    //             fee_breakdown:
+    //                 JSON.stringify(feeBreakdown),
+
+    //             ignore_fee_structure: ignoreFeeStructure ? 1 : 0,
+
+    //             ignored_fee_items: JSON.stringify(ignoredFeeItems)
+
+    //         };
+
+    //         const res = await axios.post(
+    //             `${API}/editFee.php`,
+    //             payload
+    //         );
+
+    //         if (
+    //             !res.data.status &&
+    //             res.data.message ===
+    //             "Username, Password and Reason are required."
+    //         ) {
+
+    //             setPendingPayload(payload);
+
+    //             setAuthOpen(true);
+
+    //             return;
+    //         }
+
+    //     } catch (err) {
+
+    //         console.log(err);
+
+    //         alert("Unable to update receipt.");
+
+    //     }
+
+    // };
+
+    // const authenticateAndSave = async () => {
+
+    //     try {
+
+    //         const payload = {
+
+    //             ...pendingPayload,
+
+    //             username: authData.username,
+
+    //             password: authData.password,
+
+    //             reason: authData.reason
+
+    //         };
+
+    //         const res = await axios.post(
+    //             `${API}/editFee.php`,
+    //             payload
+    //         );
+
+    //         if (res.data.status) {
+
+    //             alert("Receipt Updated Successfully");
+
+    //             setAuthOpen(false);
+
+    //             setEditOpen(false);
+
+    //             setPendingPayload(null);
+
+    //             setAuthData({
+    //                 username: "",
+    //                 password: "",
+    //                 reason: ""
+    //             });
+
+    //             await loadFees();
+
+    //             if (selectedStudent) {
+    //                 handleStudentSelect(selectedStudent);
+    //             }
+
+    //         } else {
+
+    //             alert(res.data.message);
+
+    //         }
+
+    //     } catch (err) {
+
+    //         console.log(err);
+
+    //         alert("Unable to authenticate.");
+
+    //     }
+
+    // };
+
+    // Above code has balance removed due to which accounting issues were happening ....
     const saveEditedFee = async () => {
-
         try {
-
             const selectedMonths = [];
 
             const breakdown = JSON.parse(
-                editingFee.fee_breakdown || "{}"
+                editingFee?.fee_breakdown || "{}"
             );
-
-
 
             const feeBreakdown = {
                 months: {},
-                one_time: {},
-                discounts: {},
-                totals: {}
+                one_time: {
+                    admission: Number(editReceipt.admission_fee || 0),
+                    annual: Number(editReceipt.annual_fee || 0),
+                    exam: Number(editReceipt.exam_fee || 0),
+                    commodities: Number(editReceipt.commodities_fee || 0),
+                    transport: Number(editReceipt.transport_fee || 0),
+                    other: Number(editReceipt.other_fee || 0)
+                },
+                discounts: {
+                    late_fee: Number(editReceipt.late_fee || 0),
+                    sibling: Number(
+                        editReceipt.sibling_discount_amount || 0
+                    ),
+                    special: Number(
+                        editReceipt.special_discount || 0
+                    )
+                },
+                totals: {
+                    collected: Number(editReceipt.amount || 0),
+                    balance: 0,
+                    gross: 0,
+                    net: 0
+                }
             };
 
             let transactionTotal = 0;
 
+            /*
+             * ==========================================
+             * MONTHLY FEES
+             * ==========================================
+             */
+
             academicMonths.forEach((month) => {
 
-                if (!editReceipt.months[month]?.checked)
+                if (!editReceipt.months?.[month]?.checked) {
                     return;
+                }
 
-                const tuition =
-                    Number(editReceipt.months?.[month]?.tuition || 0);
+                const tuition = Number(
+                    editReceipt.months?.[month]?.tuition || 0
+                );
 
-                const activity =
-                    Number(editReceipt.months?.[month]?.activity || 0);
+                const activity = Number(
+                    editReceipt.months?.[month]?.activity || 0
+                );
 
                 selectedMonths.push(month);
 
@@ -1730,40 +3736,16 @@ export default function FeeLedger() {
                     total: tuition + activity
                 };
 
-                feeBreakdown.one_time = {
-
-                    admission: Number(editReceipt.admission_fee || 0),
-                    annual: Number(editReceipt.annual_fee || 0),
-                    exam: Number(editReceipt.exam_fee || 0),
-                    commodities: Number(editReceipt.commodities_fee || 0),
-                    transport: Number(editReceipt.transport_fee || 0),
-                    other: Number(editReceipt.other_fee || 0)
-
-                };
-
-                feeBreakdown.discounts = {
-
-                    late_fee: Number(editReceipt.late_fee || 0),
-                    sibling: Number(editReceipt.sibling_discount_amount || 0),
-                    special: Number(editReceipt.special_discount || 0)
-
-                };
-
-                feeBreakdown.totals = {
-
-                    collected: Number(editReceipt.amount || 0),
-                    balance: Number(editReceipt.balance || 0),
-                    gross: transactionTotal,
-                    net:
-                        transactionTotal -
-                        Number(editReceipt.sibling_discount_amount || 0) -
-                        Number(editReceipt.special_discount || 0)
-
-                };
-
-                transactionTotal += tuition + activity;
-
+                transactionTotal +=
+                    tuition + activity;
             });
+
+
+            /*
+             * ==========================================
+             * ONE TIME FEES
+             * ==========================================
+             */
 
             transactionTotal +=
                 Number(editReceipt.admission_fee || 0) +
@@ -1773,121 +3755,343 @@ export default function FeeLedger() {
                 Number(editReceipt.transport_fee || 0) +
                 Number(editReceipt.other_fee || 0);
 
-            transactionTotal += Number(editReceipt.late_fee || 0);
 
-            transactionTotal -= Number(editReceipt.sibling_discount_amount || 0);
+            /*
+             * ==========================================
+             * LATE FEE
+             * ==========================================
+             */
 
-            transactionTotal -= Number(editReceipt.special_discount || 0);
+            transactionTotal += Number(
+                editReceipt.late_fee || 0
+            );
+
+
+            /*
+             * ==========================================
+             * DISCOUNTS
+             * ==========================================
+             */
+
+            transactionTotal -= Number(
+                editReceipt.sibling_discount_amount || 0
+            );
+
+            transactionTotal -= Number(
+                editReceipt.special_discount || 0
+            );
+
+
+            /*
+             * Never allow negative transaction due.
+             */
+
+            transactionTotal = Math.max(
+                0,
+                transactionTotal
+            );
+
+
+            /*
+             * ==========================================
+             * BREAKDOWN TOTALS
+             *
+             * IMPORTANT:
+             *
+             * balance is NOT calculated here.
+             *
+             * Backend settlement engine will calculate
+             * the authoritative pending balance.
+             * ==========================================
+             */
+
+            feeBreakdown.totals = {
+                collected: Number(
+                    editReceipt.amount || 0
+                ),
+
+                balance: 0,
+
+                gross: transactionTotal,
+
+                net: transactionTotal
+            };
+
+
+            /*
+             * ==========================================
+             * UPDATE UI SUPPORTING STATES
+             * ==========================================
+             */
 
             setOneTimeFees({
-                admission: breakdown.one_time?.admission || 0,
-                annual: breakdown.one_time?.annual || 0,
-                exam: breakdown.one_time?.exam || 0,
-                commodities: breakdown.one_time?.commodities || 0,
-                transport: breakdown.one_time?.transport || 0,
-                other: breakdown.one_time?.other || 0,
+                admission:
+                    breakdown.one_time?.admission || 0,
+
+                annual:
+                    breakdown.one_time?.annual || 0,
+
+                exam:
+                    breakdown.one_time?.exam || 0,
+
+                commodities:
+                    breakdown.one_time?.commodities || 0,
+
+                transport:
+                    breakdown.one_time?.transport || 0,
+
+                other:
+                    breakdown.one_time?.other || 0
             });
+
 
             setDiscounts({
-                lateFee: breakdown.discounts?.late_fee || 0,
-                sibling: breakdown.discounts?.sibling || 0,
-                special: breakdown.discounts?.special || 0,
+                lateFee:
+                    breakdown.discounts?.late_fee || 0,
+
+                sibling:
+                    breakdown.discounts?.sibling || 0,
+
+                special:
+                    breakdown.discounts?.special || 0
             });
 
-            setCollectedAmount(breakdown.totals?.collected || 0);
 
-            // academicMonths.forEach(month => {
+            setCollectedAmount(
+                breakdown.totals?.collected || 0
+            );
 
-            //     const monthData = breakdown.months?.[month] || {};
 
-            //     months[month] = {
+            /*
+             * ==========================================
+             * AUTHORITATIVE FRONTEND PAYMENT
+             *
+             * This is the actual amount being paid
+             * by the current edited receipt.
+             *
+             * DO NOT use editTotals.balance here.
+             * ==========================================
+             */
 
-            //         checked: selectedMonths.includes(month),
+            const currentPayment = Math.max(
+                0,
+                Number(editReceipt.amount || 0)
+            );
 
-            //         tuition: monthData.tuition || 0,
 
-            //         activity: monthData.activity || 0,
-
-            //         total: monthData.total || 0
-
-            //     };
-
-            // });
+            /*
+             * ==========================================
+             * PAYLOAD
+             * ==========================================
+             */
 
             const payload = {
 
                 uuid: editReceipt.uuid,
 
-                payment_date: editReceipt.payment_date,
+                payment_date:
+                    editReceipt.payment_date,
 
-                payment_method: editReceipt.payment_method,
+                payment_method:
+                    editReceipt.payment_method,
 
-                amount: editReceipt.amount,
+                /*
+                 * Actual current payment.
+                 */
+                amount: currentPayment,
 
-                balance: editTotals.balance,
+                /*
+                 * IMPORTANT:
+                 *
+                 * Do NOT send frontend balance.
+                 *
+                 * Backend calculates:
+                 *
+                 * previous pending
+                 *      ↓
+                 * current payment
+                 *      ↓
+                 * current fee
+                 *      ↓
+                 * final pending/deposit
+                 *
+                 * So balance is intentionally omitted.
+                 */
 
-                remarks: editReceipt.remarks,
+                remarks:
+                    editReceipt.remarks || "",
 
-                selected_months: selectedMonths,
 
-                added_months: editReceipt.addedMonths || [],
+                /*
+                 * ======================================
+                 * MONTHS
+                 * ======================================
+                 */
 
-                removed_months: editReceipt.removedMonths || [],
+                selected_months:
+                    selectedMonths,
 
-                transaction_total: editTotals.net,
+                added_months:
+                    editReceipt.addedMonths || [],
 
-                months_count: selectedMonths.length,
+                removed_months:
+                    editReceipt.removedMonths || [],
 
-                include_monthly: 1,
+
+                /*
+                 * ======================================
+                 * CURRENT TRANSACTION DUE
+                 * ======================================
+                 */
+
+                transaction_total:
+                    transactionTotal,
+
+                months_count:
+                    selectedMonths.length || 1,
+
+
+                /*
+                 * ======================================
+                 * FEE FLAGS
+                 * ======================================
+                 */
+
+                include_monthly:
+                    selectedMonths.length > 0 ? 1 : 0,
 
                 include_admission:
-                    Number(editReceipt.admission_fee) > 0 ? 1 : 0,
+                    Number(editReceipt.admission_fee || 0) > 0
+                        ? 1
+                        : 0,
 
                 include_annual:
-                    Number(editReceipt.annual_fee) > 0 ? 1 : 0,
+                    Number(editReceipt.annual_fee || 0) > 0
+                        ? 1
+                        : 0,
 
                 include_exam:
-                    Number(editReceipt.exam_fee) > 0 ? 1 : 0,
+                    Number(editReceipt.exam_fee || 0) > 0
+                        ? 1
+                        : 0,
 
-                include_activity: 1,
+                include_activity:
+                    1,
 
                 include_commodities:
-                    Number(editReceipt.commodities_fee) > 0 ? 1 : 0,
+                    Number(editReceipt.commodities_fee || 0) > 0
+                        ? 1
+                        : 0,
+
+
+                /*
+                 * ======================================
+                 * OTHER FEES
+                 * ======================================
+                 */
 
                 commodities_fee:
-                    Number(editReceipt.commodities_fee || 0),
+                    Number(
+                        editReceipt.commodities_fee || 0
+                    ),
 
-                computer: editReceipt.computer,
+                computer:
+                    Number(editReceipt.computer || 0),
 
-                abacus: editReceipt.abacus,
+                abacus:
+                    Number(editReceipt.abacus || 0),
 
-                taekwondo: editReceipt.taekwondo,
+                taekwondo:
+                    Number(editReceipt.taekwondo || 0),
 
                 late_fee:
-                    Number(editReceipt.late_fee || 0),
+                    Number(
+                        editReceipt.late_fee || 0
+                    ),
+
+
+                /*
+                 * ======================================
+                 * DISCOUNTS
+                 * ======================================
+                 */
 
                 sibling_discount_enabled:
-                    Number(editReceipt.sibling_discount_amount || 0) > 0 ? 1 : 0,
+                    Number(
+                        editReceipt.sibling_discount_amount || 0
+                    ) > 0
+                        ? 1
+                        : 0,
 
                 sibling_discount_amount:
-                    Number(editReceipt.sibling_discount_amount || 0),
+                    Number(
+                        editReceipt.sibling_discount_amount || 0
+                    ),
 
                 special_discount:
-                    Number(editReceipt.special_discount || 0),
+                    Number(
+                        editReceipt.special_discount || 0
+                    ),
+
+
+                /*
+                 * ======================================
+                 * BREAKDOWN
+                 * ======================================
+                 */
 
                 fee_breakdown:
                     JSON.stringify(feeBreakdown),
 
-                ignore_fee_structure: ignoreFeeStructure ? 1 : 0,
 
-                ignored_fee_items: JSON.stringify(ignoredFeeItems)
+                /*
+                 * ======================================
+                 * IGNORED FEE STRUCTURE
+                 * ======================================
+                 */
 
+                ignore_fee_structure:
+                    ignoreFeeStructure ? 1 : 0,
+
+                ignored_fee_items:
+                    JSON.stringify(
+                        ignoredFeeItems || []
+                    )
             };
+
+
+            /*
+             * ==========================================
+             * DEBUG
+             *
+             * Temporary. Testing complete hone ke baad
+             * isko remove kar sakte ho.
+             * ==========================================
+             */
+
+            console.log(
+                "EDIT FEE PAYLOAD:",
+                payload
+            );
+
+
+            /*
+             * ==========================================
+             * API REQUEST
+             * ==========================================
+             */
 
             const res = await axios.post(
                 `${API}/editFee.php`,
                 payload
             );
+
+
+            /*
+             * ==========================================
+             * ADMIN AUTH REQUIRED
+             * ==========================================
+             */
 
             if (
                 !res.data.status &&
@@ -1902,46 +4106,221 @@ export default function FeeLedger() {
                 return;
             }
 
+
+            /*
+             * ==========================================
+             * SUCCESS
+             * ==========================================
+             */
+
+            if (res.data.status) {
+
+                console.log(
+                    "EDIT SETTLEMENT RESULT:",
+                    {
+                        previousPending:
+                            res.data.previous_pending,
+
+                        pendingUsed:
+                            res.data.pending_used,
+
+                        currentFeePaid:
+                            res.data.current_fee_paid,
+
+                        currentDeposit:
+                            res.data.current_deposit,
+
+                        finalPending:
+                            res.data.pending,
+
+                        finalDeposit:
+                            res.data.deposit,
+
+                        balance:
+                            res.data.balance
+                    }
+                );
+
+
+                alert(
+                    `Receipt Updated Successfully\n\n` +
+                    `Pending: ₹${Number(
+                        res.data.pending || 0
+                    ).toFixed(2)}\n` +
+                    `Deposit: ₹${Number(
+                        res.data.deposit || 0
+                    ).toFixed(2)}`
+                );
+
+
+                setEditOpen(false);
+
+                setPendingPayload(null);
+
+
+                /*
+                 * Reload fee list.
+                 */
+
+                await loadFees();
+
+
+                /*
+                 * Reload selected student.
+                 */
+
+                if (selectedStudent) {
+
+                    handleStudentSelect(
+                        selectedStudent
+                    );
+                }
+
+            } else {
+
+                alert(
+                    res.data.message ||
+                    "Unable to update receipt."
+                );
+            }
+
         } catch (err) {
 
-            console.log(err);
+            console.log(
+                "saveEditedFee error:",
+                err
+            );
 
-            alert("Unable to update receipt.");
+            console.log(
+                "Server response:",
+                err?.response?.data
+            );
 
+            alert(
+                err?.response?.data?.message ||
+                "Unable to update receipt."
+            );
         }
-
     };
+
+
+    /*
+     * =====================================================
+     * ADMIN AUTHENTICATION + SAVE
+     * =====================================================
+     */
 
     const authenticateAndSave = async () => {
 
         try {
 
+            if (!pendingPayload) {
+
+                alert(
+                    "No pending edit found."
+                );
+
+                return;
+            }
+
+
             const payload = {
 
                 ...pendingPayload,
 
-                username: authData.username,
+                username:
+                    authData.username,
 
-                password: authData.password,
+                password:
+                    authData.password,
 
-                reason: authData.reason
-
+                reason:
+                    authData.reason
             };
+
+
+            console.log(
+                "AUTHENTICATED EDIT PAYLOAD:",
+                payload
+            );
+
 
             const res = await axios.post(
                 `${API}/editFee.php`,
                 payload
             );
 
+
+            /*
+             * ==========================================
+             * SUCCESS
+             * ==========================================
+             */
+
             if (res.data.status) {
 
-                alert("Receipt Updated Successfully");
+                console.log(
+                    "AUTH EDIT SETTLEMENT RESULT:",
+                    {
+                        previousPending:
+                            res.data.previous_pending,
+
+                        pendingUsed:
+                            res.data.pending_used,
+
+                        currentFeePaid:
+                            res.data.current_fee_paid,
+
+                        currentDeposit:
+                            res.data.current_deposit,
+
+                        finalPending:
+                            res.data.pending,
+
+                        finalDeposit:
+                            res.data.deposit,
+
+                        balance:
+                            res.data.balance
+                    }
+                );
+
+
+                alert(
+                    `Receipt Updated Successfully\n\n` +
+                    `Pending: ₹${Number(
+                        res.data.pending || 0
+                    ).toFixed(2)}\n` +
+                    `Deposit: ₹${Number(
+                        res.data.deposit || 0
+                    ).toFixed(2)}`
+                );
+
+
+                /*
+                 * Close authentication modal.
+                 */
 
                 setAuthOpen(false);
 
+
+                /*
+                 * Close edit modal.
+                 */
+
                 setEditOpen(false);
 
+
+                /*
+                 * Clear pending payload.
+                 */
+
                 setPendingPayload(null);
+
+
+                /*
+                 * Clear authentication fields.
+                 */
 
                 setAuthData({
                     username: "",
@@ -1949,40 +4328,166 @@ export default function FeeLedger() {
                     reason: ""
                 });
 
+
+                /*
+                 * Reload fees.
+                 */
+
                 await loadFees();
 
+
+                /*
+                 * Reload selected student.
+                 */
+
                 if (selectedStudent) {
-                    handleStudentSelect(selectedStudent);
+
+                    handleStudentSelect(
+                        selectedStudent
+                    );
                 }
 
             } else {
 
-                alert(res.data.message);
-
+                alert(
+                    res.data.message ||
+                    "Unable to authenticate."
+                );
             }
 
         } catch (err) {
 
-            console.log(err);
+            console.log(
+                "authenticateAndSave error:",
+                err
+            );
 
-            alert("Unable to authenticate.");
+            console.log(
+                "Server response:",
+                err?.response?.data
+            );
 
+            alert(
+                err?.response?.data?.message ||
+                "Unable to authenticate."
+            );
         }
-
     };
 
-    const summaryRows = [
-        ...academicMonths.map(month => [
-            month,
-            paymentHistory.monthly[month] || null
-        ]),
-        ["Admission Fee", paymentHistory.admission],
-        ["Annual Fee", paymentHistory.annual],
-        ["Exam Fee", paymentHistory.exam],
-        ["Commodity Fee", paymentHistory.commodities],
-        ["Transport Fee", paymentHistory.transport],
-        ["Other Fee", paymentHistory.other],
-    ];
+    // const summaryRows = [
+    //     ...academicMonths.map(month => [
+    //         month,
+    //         paymentHistory.monthly[month] || null
+    //     ]),
+    //     ["Admission Fee", paymentHistory.admission],
+    //     ["Annual Fee", paymentHistory.annual],
+    //     ["Exam Fee", paymentHistory.exam],
+    //     ["Commodity Fee", paymentHistory.commodities],
+    //     ["Transport Fee", paymentHistory.transport],
+    //     ["Other Fee", paymentHistory.other],
+    // ];
+
+    // To show the complete clarity ..............
+
+    // const summaryRows = academicMonths
+    //     .map((month) => {
+    //         const item = paymentHistory.monthly?.[month];
+
+    //         return {
+    //             month,
+    //             item: item || null
+    //         };
+    //     })
+    //     .filter(({ item }) => item);
+
+    // This fails badly changing the code ............
+    const summaryRows = summaryFees.map((fee) => {
+        let months = [];
+
+        // =========================================================
+        // PARSE SELECTED MONTHS
+        // =========================================================
+        if (Array.isArray(fee.selected_months)) {
+            months = fee.selected_months;
+        } else if (
+            typeof fee.selected_months === "string" &&
+            fee.selected_months.trim() !== ""
+        ) {
+            try {
+                months = JSON.parse(fee.selected_months);
+
+                if (typeof months === "string") {
+                    months = JSON.parse(months);
+                }
+            } catch {
+                months = fee.selected_months
+                    .split(",")
+                    .map((m) => m.trim())
+                    .filter(Boolean);
+            }
+        }
+
+        if (!Array.isArray(months) && fee.month) {
+            months = [fee.month];
+        }
+
+        if (!Array.isArray(months)) {
+            months = [];
+        }
+
+        // =========================================================
+        // FEE BREAKDOWN
+        // =========================================================
+        let tuitionTotal = 0;
+        let activityTotal = 0;
+        let monthlyTotal = 0;
+
+        let feeBreakdown = {};
+
+        if (fee.fee_breakdown) {
+            try {
+                feeBreakdown =
+                    typeof fee.fee_breakdown === "string"
+                        ? JSON.parse(fee.fee_breakdown)
+                        : fee.fee_breakdown;
+
+                if (typeof feeBreakdown === "string") {
+                    feeBreakdown = JSON.parse(feeBreakdown);
+                }
+            } catch (err) {
+                console.error(
+                    "Unable to parse fee breakdown:",
+                    err
+                );
+
+                feeBreakdown = {};
+            }
+        }
+
+        Object.values(
+            feeBreakdown.months || {}
+        ).forEach((monthData) => {
+            tuitionTotal += Number(
+                monthData?.tuition || 0
+            );
+
+            activityTotal += Number(
+                monthData?.activity || 0
+            );
+
+            monthlyTotal += Number(
+                monthData?.total || 0
+            );
+        });
+
+        return {
+            fee,
+            months,
+            tuitionTotal,
+            activityTotal,
+            monthlyTotal
+        };
+    });
 
     return (
 
@@ -2073,7 +4578,7 @@ export default function FeeLedger() {
                     </CardContent>
                 </Card>
 
-                <Card sx={{ mt: 2 }}>
+                {/* <Card sx={{ mt: 2 }}>
                     <CardContent>
 
                         <Typography variant="h6" gutterBottom>
@@ -2162,6 +4667,328 @@ export default function FeeLedger() {
 
                         </Grid>
 
+                    </CardContent>
+                </Card> */}
+
+                {/* Above code fails to make user understand of the transactions in a better way ........ */}
+
+                <Card sx={{ mt: 2 }}>
+                    <CardContent>
+                        <Typography variant="h6" gutterBottom>
+                            Payment Summary
+                        </Typography>
+
+                        <Divider sx={{ mb: 2 }} />
+
+                        <TableContainer
+                            component={Paper}
+                            sx={{
+                                maxHeight: 500,
+                                overflow: "auto"
+                            }}
+                        >
+                            <Table stickyHeader size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>
+                                            <b>Month</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Date</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Receipt</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Tuition</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Activity</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Transaction Total</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Collected</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Balance</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Payment Method</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Remarks</b>
+                                        </TableCell>
+                                    </TableRow>
+                                </TableHead>
+
+                                <TableBody>
+                                    {summaryRows.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell
+                                                colSpan={10}
+                                                align="center"
+                                            >
+                                                No payment history found.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        summaryRows.map(
+                                            ({
+                                                fee,
+                                                months,
+                                                tuitionTotal,
+                                                activityTotal,
+                                                monthlyTotal
+                                            }) => {
+                                                const transactionTotal =
+                                                    Number(
+                                                        fee.transaction_total ||
+                                                        monthlyTotal ||
+                                                        0
+                                                    );
+
+                                                const collected =
+                                                    Number(
+                                                        fee.amount || 0
+                                                    );
+
+                                                const balance =
+                                                    Number(
+                                                        fee.balance || 0
+                                                    );
+
+                                                return (
+                                                    <TableRow
+                                                        key={
+                                                            fee.transaction_uuid ||
+                                                            fee.uuid
+                                                        }
+                                                        hover
+                                                    >
+                                                        {/* MONTH */}
+                                                        <TableCell>
+                                                            <b>
+                                                                {months.length
+                                                                    ? months.join(
+                                                                        ", "
+                                                                    )
+                                                                    : fee.month ||
+                                                                    "-"}
+                                                            </b>
+                                                        </TableCell>
+
+                                                        {/* DATE */}
+                                                        <TableCell>
+                                                            {fee.payment_date ||
+                                                                "-"}
+                                                        </TableCell>
+
+                                                        {/* RECEIPT */}
+                                                        <TableCell>
+                                                            {fee.receipt_number ||
+                                                                "-"}
+                                                        </TableCell>
+
+                                                        {/* TUITION */}
+                                                        <TableCell>
+                                                            ₹
+                                                            {tuitionTotal.toFixed(
+                                                                2
+                                                            )}
+                                                        </TableCell>
+
+                                                        {/* ACTIVITY */}
+                                                        <TableCell>
+                                                            ₹
+                                                            {activityTotal.toFixed(
+                                                                2
+                                                            )}
+                                                        </TableCell>
+
+                                                        {/* TRANSACTION TOTAL */}
+                                                        <TableCell>
+                                                            ₹
+                                                            {transactionTotal.toFixed(
+                                                                2
+                                                            )}
+                                                        </TableCell>
+
+                                                        {/* COLLECTED */}
+                                                        <TableCell>
+                                                            ₹
+                                                            {collected.toFixed(
+                                                                2
+                                                            )}
+                                                        </TableCell>
+
+                                                        {/* BALANCE */}
+                                                        <TableCell>
+                                                            {balance > 0 ? (
+                                                                <Chip
+                                                                    size="small"
+                                                                    color="warning"
+                                                                    label={`Pending ₹${balance.toFixed(
+                                                                        2
+                                                                    )}`}
+                                                                />
+                                                            ) : (
+                                                                <Chip
+                                                                    size="small"
+                                                                    color="success"
+                                                                    label="Settled"
+                                                                />
+                                                            )}
+                                                        </TableCell>
+
+                                                        {/* PAYMENT METHOD */}
+                                                        <TableCell>
+                                                            {fee.payment_method
+                                                                ? fee.payment_method.toUpperCase()
+                                                                : "-"}
+                                                        </TableCell>
+
+                                                        {/* REMARKS */}
+                                                        <TableCell>
+                                                            {fee.remarks || "-"}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            }
+                                        )
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+
+                        {/* <Divider sx={{ my: 2 }} />
+
+                        <Grid container spacing={2}>
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Total Collected"
+                                    value={`₹${summaryFees
+                                        .reduce(
+                                            (total, fee) =>
+                                                total +
+                                                Number(
+                                                    fee.amount || 0
+                                                ),
+                                            0
+                                        )
+                                        .toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Deposit"
+                                    value={`₹${Number(
+                                        paymentHistory?.deposit || 0
+                                    ).toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Pending"
+                                    value={`₹${summaryFees
+                                        .reduce(
+                                            (total, fee) =>
+                                                total +
+                                                Number(
+                                                    fee.balance || 0
+                                                ),
+                                            0
+                                        )
+                                        .toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+                        </Grid> */}
+                        {/* Above code has some calculation mismatch 
+                        due to latest paymnt summary format change */}
+                        <Divider sx={{ my: 2 }} />
+
+                        <Grid container spacing={2}>
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Total Collected"
+                                    value={`₹${summaryFees
+                                        .reduce(
+                                            (total, fee) =>
+                                                total + Number(fee.amount || 0),
+                                            0
+                                        )
+                                        .toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Deposit"
+                                    value={`₹${Number(
+                                        paymentHistory?.deposit || 0
+                                    ).toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+
+                            <Grid item xs={12} md={4}>
+                                <TextField
+                                    fullWidth
+                                    label="Pending"
+                                    value={`₹${Math.max(
+                                        0,
+                                        summaryFees.reduce(
+                                            (total, fee) =>
+                                                total +
+                                                Math.max(
+                                                    0,
+                                                    Number(fee.transaction_total || 0)
+                                                ),
+                                            0
+                                        ) -
+                                        summaryFees.reduce(
+                                            (total, fee) =>
+                                                total + Number(fee.amount || 0),
+                                            0
+                                        )
+                                    ).toFixed(2)}`}
+                                    InputProps={{
+                                        readOnly: true
+                                    }}
+                                />
+                            </Grid>
+                        </Grid>
                     </CardContent>
                 </Card>
 
@@ -2420,7 +5247,7 @@ export default function FeeLedger() {
                                                 }
                                             />
 
-                                            {isPaid && (
+                                            {/* {isPaid && (
                                                 <Stack
                                                     direction="row"
                                                     spacing={0.5}
@@ -2492,7 +5319,7 @@ export default function FeeLedger() {
                                                     )}
 
                                                 </Stack>
-                                            )}
+                                            )} */}
 
                                         </Stack>
 
