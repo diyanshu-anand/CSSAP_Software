@@ -3671,6 +3671,8 @@ export default function FeeLedger() {
     // };
 
     // Above code has balance removed due to which accounting issues were happening ....
+
+    let payload = null
     const saveEditedFee = async () => {
         try {
             const selectedMonths = [];
@@ -3885,7 +3887,7 @@ export default function FeeLedger() {
              * ==========================================
              */
 
-            const payload = {
+            payload = {
 
                 uuid: editReceipt.uuid,
 
@@ -4086,6 +4088,17 @@ export default function FeeLedger() {
                 payload
             );
 
+            console.log("EDIT RESPONSE:", res);
+            console.log("EDIT RESPONSE DATA:", res.data);
+            console.log("STATUS:", res.data?.status);
+            console.log("MESSAGE:", JSON.stringify(res.data?.message));
+            console.log(
+                "AUTH CONDITION:",
+                !res.data?.status &&
+                res.data?.message ===
+                "Username, Password and Reason are required."
+            );
+
 
             /*
              * ==========================================
@@ -4185,7 +4198,6 @@ export default function FeeLedger() {
             }
 
         } catch (err) {
-
             console.log(
                 "saveEditedFee error:",
                 err
@@ -4196,8 +4208,36 @@ export default function FeeLedger() {
                 err?.response?.data
             );
 
+            const responseData = err?.response?.data;
+
+            // ==========================================
+            // ADMIN AUTH REQUIRED
+            // Backend returns HTTP 403
+            // ==========================================
+            if (
+                err?.response?.status === 403 &&
+                responseData?.message ===
+                "Username, Password and Reason are required."
+            ) {
+                console.log(
+                    "ADMIN AUTH REQUIRED - OPENING AUTH MODAL"
+                );
+
+                setPendingPayload(payload);
+
+                setAuthData({
+                    username: "",
+                    password: "",
+                    reason: ""
+                });
+
+                setAuthOpen(true);
+
+                return;
+            }
+
             alert(
-                err?.response?.data?.message ||
+                responseData?.message ||
                 "Unable to update receipt."
             );
         }
