@@ -578,6 +578,18 @@ export default function FeeLedger() {
                 String(fee.fee_status || "ACTIVE").toUpperCase() === "ACTIVE"
         );
 
+        // const history = {
+        //     monthly: {},
+        //     admission: null,
+        //     annual: null,
+        //     exam: null,
+        //     commodities: null,
+        //     transport: null,
+        //     other: null,
+        //     deposit: 0,
+        //     pending: 0,
+        // };
+
         const history = {
             monthly: {},
             admission: null,
@@ -586,6 +598,9 @@ export default function FeeLedger() {
             commodities: null,
             transport: null,
             other: null,
+
+            oneTimePayments: [],
+
             deposit: 0,
             pending: 0,
         };
@@ -749,6 +764,14 @@ export default function FeeLedger() {
                 };
             }
 
+            const hasOneTimePayment =
+                Number(breakdown.one_time?.admission || 0) > 0 ||
+                Number(breakdown.one_time?.annual || 0) > 0 ||
+                Number(breakdown.one_time?.exam || 0) > 0 ||
+                Number(breakdown.one_time?.commodities || 0) > 0 ||
+                Number(breakdown.one_time?.transport || 0) > 0 ||
+                Number(breakdown.one_time?.other || 0) > 0;
+
             if (Array.isArray(fee.selected_months)) {
 
                 months = fee.selected_months;
@@ -767,6 +790,8 @@ export default function FeeLedger() {
                         months = JSON.parse(months);
                     }
 
+
+
                 } catch {
 
                     // Handles old comma-separated format
@@ -782,6 +807,25 @@ export default function FeeLedger() {
             // Old single-month records
             if (months.length === 0 && fee.month) {
                 months = [fee.month];
+            }
+
+            if (months.length === 0 && hasOneTimePayment) {
+                history.oneTimePayments.push({
+                    fee,
+                    receipt: fee.receipt_number,
+                    date: fee.payment_date,
+                    amount: Number(
+                        breakdown.totals?.collected ||
+                        fee.amount ||
+                        0
+                    ),
+                    admission: Number(breakdown.one_time?.admission || 0),
+                    annual: Number(breakdown.one_time?.annual || 0),
+                    exam: Number(breakdown.one_time?.exam || 0),
+                    commodities: Number(breakdown.one_time?.commodities || 0),
+                    transport: Number(breakdown.one_time?.transport || 0),
+                    other: Number(breakdown.one_time?.other || 0),
+                });
             }
 
             // This was for month as single unit feature logic.
@@ -924,8 +968,8 @@ export default function FeeLedger() {
         // balance is a snapshot of the transaction at that time.
         // We need to reconstruct the actual financial position.
 
-        let runningPending = 0;
-        let runningDeposit = 0;
+        // let runningPending = 0;
+        // let runningDeposit = 0;
 
         // Modification is required to do due to identification of flaw in accounting .....
         // const settlementFees = [...uniquePaidFees].sort((a, b) => {
@@ -941,6 +985,91 @@ export default function FeeLedger() {
         //     return Number(a.id || 0) - Number(b.id || 0);
         // });
 
+        // const settlementFees = [...paidFees].sort((a, b) => {
+        //     const dateA = new Date(a.payment_date || 0);
+        //     const dateB = new Date(b.payment_date || 0);
+
+        //     const dateDiff = dateA - dateB;
+
+        //     if (dateDiff !== 0) {
+        //         return dateDiff;
+        //     }
+
+        //     return Number(a.id || 0) - Number(b.id || 0);
+        // });
+
+        // Save ledger bacha hai aake karta hu usko tune in..... 
+        // Kar liya done ....... (12:54 a.m.)
+        // settlementFees.forEach((fee) => {
+        //     const due = Math.max(
+        //         0,
+        //         Number(fee.transaction_total || 0)
+        //     );
+
+        //     const paid = Math.max(
+        //         0,
+        //         Number(fee.amount || 0)
+        //     );
+
+        //     // ------------------------------------------------------
+        //     // CASE 1:
+        //     // Payment is less than transaction due
+        //     // ------------------------------------------------------
+        //     if (paid < due) {
+        //         runningPending += due - paid;
+        //         return;
+        //     }
+
+        //     // ------------------------------------------------------
+        //     // CASE 2:
+        //     // Fully paid exactly
+        //     // ------------------------------------------------------
+        //     if (paid === due) {
+        //         return;
+        //     }
+
+        //     // ------------------------------------------------------
+        //     // CASE 3:
+        //     // Payment is greater than current transaction due
+        //     // ------------------------------------------------------
+        //     let extraPayment = paid - due;
+
+        //     // First consume any old pending
+        //     if (runningPending > 0 && extraPayment > 0) {
+        //         const pendingUsed = Math.min(
+        //             runningPending,
+        //             extraPayment
+        //         );
+
+        //         runningPending -= pendingUsed;
+        //         extraPayment -= pendingUsed;
+        //     }
+
+        //     // Anything still left becomes genuine deposit
+        //     if (extraPayment > 0) {
+        //         runningDeposit += extraPayment;
+        //     }
+        // });
+
+        // history.pending = Math.max(0, runningPending);
+        // history.deposit = Math.max(0, runningDeposit);
+
+        // console.log("FINAL SETTLEMENT HISTORY", {
+        //     pending: history.pending,
+        //     deposit: history.deposit,
+        //     transactions: settlementFees.map((fee) => ({
+        //         receipt: fee.receipt_number,
+        //         date: fee.payment_date,
+        //         due: Number(fee.transaction_total || 0),
+        //         paid: Number(fee.amount || 0),
+        //         storedBalance: Number(fee.balance || 0)
+        //     }))
+        // });
+
+
+        // Recoding the balancing code
+        let runningBalance = 0;
+
         const settlementFees = [...paidFees].sort((a, b) => {
             const dateA = new Date(a.payment_date || 0);
             const dateB = new Date(b.payment_date || 0);
@@ -954,8 +1083,6 @@ export default function FeeLedger() {
             return Number(a.id || 0) - Number(b.id || 0);
         });
 
-        // Save ledger bacha hai aake karta hu usko tune in..... 
-        // Kar liya done ....... (12:54 a.m.)
         settlementFees.forEach((fee) => {
             const due = Math.max(
                 0,
@@ -967,48 +1094,13 @@ export default function FeeLedger() {
                 Number(fee.amount || 0)
             );
 
-            // ------------------------------------------------------
-            // CASE 1:
-            // Payment is less than transaction due
-            // ------------------------------------------------------
-            if (paid < due) {
-                runningPending += due - paid;
-                return;
-            }
-
-            // ------------------------------------------------------
-            // CASE 2:
-            // Fully paid exactly
-            // ------------------------------------------------------
-            if (paid === due) {
-                return;
-            }
-
-            // ------------------------------------------------------
-            // CASE 3:
-            // Payment is greater than current transaction due
-            // ------------------------------------------------------
-            let extraPayment = paid - due;
-
-            // First consume any old pending
-            if (runningPending > 0 && extraPayment > 0) {
-                const pendingUsed = Math.min(
-                    runningPending,
-                    extraPayment
-                );
-
-                runningPending -= pendingUsed;
-                extraPayment -= pendingUsed;
-            }
-
-            // Anything still left becomes genuine deposit
-            if (extraPayment > 0) {
-                runningDeposit += extraPayment;
-            }
+            // Positive = pending
+            // Negative = deposit
+            runningBalance += due - paid;
         });
 
-        history.pending = Math.max(0, runningPending);
-        history.deposit = Math.max(0, runningDeposit);
+        history.pending = Math.max(0, runningBalance);
+        history.deposit = Math.max(0, -runningBalance);
 
         console.log("FINAL SETTLEMENT HISTORY", {
             pending: history.pending,
@@ -1025,6 +1117,7 @@ export default function FeeLedger() {
 
 
         console.log("Final History:", history);
+        console.log("ONE TIME PAYMENTS:", history.oneTimePayments);
         setPaymentHistory(history);
         setPaidOneTimeFees({
             admission: history.admission,
@@ -1350,7 +1443,10 @@ export default function FeeLedger() {
 
         await loadFees();
 
-        handleStudentSelect(selectedStudent);
+        // handleStudentSelect(selectedStudent);  Loading issues from here
+        if (selectedStudent) {
+            await handleStudentSelect(selectedStudent);
+        }
 
         console.log(fee);
 
@@ -3352,9 +3448,13 @@ export default function FeeLedger() {
 
                 await loadFees();
 
-                handleStudentSelect(
-                    selectedStudent
-                );
+                // handleStudentSelect(
+                //     selectedStudent
+                // ); Loading issues diaognising point ......
+
+                if (selectedStudent) {
+                    await handleStudentSelect(selectedStudent);
+                }
 
             } else {
                 alert(
@@ -4184,9 +4284,11 @@ export default function FeeLedger() {
 
                 if (selectedStudent) {
 
-                    handleStudentSelect(
-                        selectedStudent
-                    );
+                    // handleStudentSelect(
+                    //     selectedStudent
+                    // );
+                    // Loading issues identified at this location as well ............
+                    await handleStudentSelect(selectedStudent);
                 }
 
             } else {
@@ -4240,6 +4342,8 @@ export default function FeeLedger() {
                 responseData?.message ||
                 "Unable to update receipt."
             );
+        }finally{   // this finally block was missing from the point of loading ....
+            setSaving(false);
         }
     };
 
@@ -4528,6 +4632,13 @@ export default function FeeLedger() {
             monthlyTotal
         };
     });
+
+    const oneTimePayments = Array.isArray(history?.oneTimePayments)
+        ? history.oneTimePayments
+        : [];
+
+    console.log("UI oneTimePayments:", oneTimePayments);
+    console.log("UI oneTimePayments length:", oneTimePayments.length);
 
     return (
 
@@ -5209,6 +5320,134 @@ export default function FeeLedger() {
 
                 </Card>
 
+                <Card sx={{ mt: 3 }}>
+                    <CardContent>
+                        <Typography variant="h6" gutterBottom>
+                            One-Time Payments
+                        </Typography>
+
+                        <Divider sx={{ mb: 2 }} />
+
+                        <TableContainer component={Paper}>
+                            <Table>
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Date</TableCell>
+                                        <TableCell>Admission</TableCell>
+                                        <TableCell>Annual</TableCell>
+                                        <TableCell>Exam</TableCell>
+                                        <TableCell>Commodities</TableCell>
+                                        <TableCell>Transport</TableCell>
+                                        <TableCell>Other</TableCell>
+                                        <TableCell>Total</TableCell>
+                                        <TableCell>Receipt</TableCell>
+                                        <TableCell align="center">
+                                            Actions
+                                        </TableCell>
+                                    </TableRow>
+                                </TableHead>
+
+                                <TableBody>
+                                    {paymentHistory.oneTimePayments?.map((payment, index) => (
+                                        <TableRow key={payment.fee?.uuid || index}>
+
+                                            <TableCell>
+                                                {payment.date || "-"}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.admission || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.annual || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.exam || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.commodities || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.transport || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                ₹{Number(payment.other || 0).toFixed(2)}
+                                            </TableCell>
+
+                                            <TableCell>
+                                                <strong>
+                                                    ₹{Number(payment.amount || 0).toFixed(2)}
+                                                </strong>
+                                            </TableCell>
+
+                                            <TableCell>
+                                                {payment.receipt || "-"}
+                                            </TableCell>
+
+                                            <TableCell align="center">
+                                                <Stack
+                                                    direction="row"
+                                                    spacing={1}
+                                                    justifyContent="center"
+                                                >
+                                                    <Tooltip title="View Receipt">
+                                                        <IconButton
+                                                            color="primary"
+                                                            size="small"
+                                                            onClick={() =>
+                                                                viewReceipt(payment.fee)
+                                                            }
+                                                        >
+                                                            <VisibilityIcon />
+                                                        </IconButton>
+                                                    </Tooltip>
+
+                                                    <Tooltip title="Edit Payment">
+                                                        <IconButton
+                                                            color="warning"
+                                                            size="small"
+                                                            onClick={() => editMonth(payment.fee)}
+                                                        >
+                                                            <EditIcon />
+                                                        </IconButton>
+                                                    </Tooltip>
+
+                                                    <Tooltip title="Delete Payment">
+                                                        <IconButton
+                                                            color="error"
+                                                            size="small"
+                                                            onClick={() =>
+                                                                deleteOneTimeFee(payment.fee)
+                                                            }
+                                                        >
+                                                            <DeleteIcon />
+                                                        </IconButton>
+                                                    </Tooltip>
+                                                </Stack>
+                                            </TableCell>
+
+                                        </TableRow>
+                                    ))}
+
+                                    {(!paymentHistory.oneTimePayments ||
+                                        paymentHistory.oneTimePayments.length === 0) && (
+                                            <TableRow>
+                                                <TableCell colSpan={10} align="center">
+                                                    No one-time payments found
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </CardContent>
+                </Card>
+
                 <Card sx={{ mt: 2 }}>
                     <CardContent>
 
@@ -5276,7 +5515,7 @@ export default function FeeLedger() {
                                                 fullWidth
                                                 type="number"
                                                 label={item.label}
-                                                disabled={isPaid && !isEditing}
+                                                // disabled={isPaid && !isEditing}
                                                 value={oneTimeFees[item.key] || ""}
                                                 placeholder="Enter amount"
                                                 onChange={(e) =>
