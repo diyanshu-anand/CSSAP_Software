@@ -43,6 +43,8 @@ import { useNavigate } from "react-router-dom";
 
 import CloseIcon from "@mui/icons-material/Close";
 
+import { Switch } from "@mui/material";
+
 
 
 const academicMonths = [
@@ -190,6 +192,8 @@ export default function FeeLedger() {
     });
 
     const [pendingPayload, setPendingPayload] = useState(null);
+
+    const [showMonthlyBreakdown, setShowMonthlyBreakdown] = useState(false); // For breakdown description of monthly payments .....
 
     // const [totals, setTotals] = useState({
     //     monthlyTotal: 0,
@@ -3446,15 +3450,19 @@ export default function FeeLedger() {
                 //
                 transactionUuidRef.current = null;
 
+                // Selected student ko preserve karo
+                const savedStudent = selectedStudent;
+
                 await loadFees();
 
-                // handleStudentSelect(
-                //     selectedStudent
-                // ); Loading issues diaognising point ......
-
-                if (selectedStudent) {
-                    await handleStudentSelect(selectedStudent);
+                // Latest data ke saath wahi student dobara select karo
+                if (savedStudent?.uuid) {
+                    await handleStudentSelect(savedStudent);
                 }
+
+                // Loading issue resolving ........
+                setSaving(false);
+
 
             } else {
                 alert(
@@ -4342,7 +4350,7 @@ export default function FeeLedger() {
                 responseData?.message ||
                 "Unable to update receipt."
             );
-        }finally{   // this finally block was missing from the point of loading ....
+        } finally {   // this finally block was missing from the point of loading ....
             setSaving(false);
         }
     };
@@ -4838,6 +4846,16 @@ export default function FeeLedger() {
                                 overflow: "auto"
                             }}
                         >
+
+                            <FormControlLabel
+                                control={
+                                    <Switch
+                                        checked={showMonthlyBreakdown}
+                                        onChange={(e) => setShowMonthlyBreakdown(e.target.checked)}
+                                    />
+                                }
+                                label={showMonthlyBreakdown ? "Month-wise Breakdown" : "Show Totals"}
+                            />
                             <Table stickyHeader size="small">
                                 <TableHead>
                                     <TableRow>
@@ -4862,16 +4880,24 @@ export default function FeeLedger() {
                                         </TableCell>
 
                                         <TableCell>
+                                            <b>Tution Pending</b>
+                                        </TableCell>
+
+                                        <TableCell>
+                                            <b>Activity Pending</b>
+                                        </TableCell>
+
+                                        <TableCell>
                                             <b>Transaction Total</b>
                                         </TableCell>
 
                                         <TableCell>
                                             <b>Collected</b>
                                         </TableCell>
-
+                                        {/* Commented becuase its poor performance and logical flaws ......
                                         <TableCell>
                                             <b>Balance</b>
-                                        </TableCell>
+                                        </TableCell> */}
 
                                         <TableCell>
                                             <b>Payment Method</b>
@@ -4919,7 +4945,128 @@ export default function FeeLedger() {
                                                         fee.balance || 0
                                                     );
 
+
+                                                // const breakdown = fee.fee_breakdown || {};
+
+                                                // const oneTime = breakdown.one_time || {};
+                                                // const totals = breakdown.totals || {};
+
+                                                // const oneTimeTotal = Object.values(oneTime).reduce(
+                                                //     (sum, value) => sum + Math.max(0, Number(value) || 0),
+                                                //     0
+                                                // );
+
+                                                // const lateFee = Math.max(0, Number(totals.late_fee) || 0);
+
+                                                // const discount = Math.max(
+                                                //     0,
+                                                //     Number(totals.discount ?? totals.total_discount) || 0
+                                                // );
+
+                                                // const totalFee = Math.max(
+                                                //     0,
+                                                //     tuitionTotal + activityTotal + oneTimeTotal + lateFee - discount
+                                                // );
+
+                                                // const receiptPending = Math.max(0, totalFee - collected);
+
+                                                // // Activity first, then one-time fees, then tuition.
+                                                // const activityPaid = Math.min(activityTotal, collected);
+
+                                                // const oneTimePaid = Math.min(
+                                                //     oneTimeTotal,
+                                                //     Math.max(0, collected - activityPaid)
+                                                // );
+
+                                                // const tuitionPaid = Math.min(
+                                                //     tuitionTotal,
+                                                //     Math.max(0, collected - activityPaid - oneTimePaid)
+                                                // );
+
+                                                // const tuitionPending = Math.max(0, tuitionTotal - tuitionPaid);
+                                                // const activityPending = Math.max(0, activityTotal - activityPaid);
+                                                // const oneTimePending = Math.max(0, oneTimeTotal - oneTimePaid);
+
+
+                                                let breakdown = fee.fee_breakdown || {};
+
+                                                // breakdown data preparation .......
+                                                if (typeof breakdown === "string") {
+                                                    try {
+                                                        breakdown = JSON.parse(breakdown);
+                                                    } catch {
+                                                        breakdown = {};
+                                                    }
+                                                }
+
+                                                const monthBreakdown = breakdown.months || {};
+
+                                                const getMonthAmount = (month, type) => {
+                                                    const monthData = monthBreakdown[month];
+
+                                                    if (!monthData) return null;
+
+                                                    const value = type === "tuition"
+                                                        ? monthData.tuition
+                                                        : monthData.activity;
+
+                                                    return value !== undefined && value !== null
+                                                        ? Number(value)
+                                                        : null;
+                                                };
+
+
+                                                const oneTime = breakdown.one_time || {};
+                                                const totals = breakdown.totals || {};
+
+                                                const oneTimeTotal = Object.values(oneTime).reduce(
+                                                    (sum, value) => sum + Math.max(0, Number(value) || 0),
+                                                    0
+                                                );
+
+                                                const lateFee = Math.max(0, Number(totals.late_fee) || 0);
+
+                                                const discount = Math.max(
+                                                    0,
+                                                    Number(totals.discount ?? totals.total_discount) || 0
+                                                );
+
+                                                const totalFee = Math.max(
+                                                    0,
+                                                    tuitionTotal + activityTotal + oneTimeTotal + lateFee - discount
+                                                );
+
+                                                const receiptPending = Math.max(0, totalFee - collected);
+
+                                                // Discount ko total fee se adjust karo
+                                                const adjustedTuition = Math.max(0, tuitionTotal - discount);
+
+                                                // Payment allocation: Activity → One-time → Tuition → Late fee
+                                                const activityPaid = Math.min(activityTotal, collected);
+
+                                                const oneTimePaid = Math.min(
+                                                    oneTimeTotal,
+                                                    Math.max(0, collected - activityPaid)
+                                                );
+
+                                                const tuitionPaid = Math.min(
+                                                    adjustedTuition,
+                                                    Math.max(0, collected - activityPaid - oneTimePaid)
+                                                );
+
+                                                const lateFeePaid = Math.min(
+                                                    lateFee,
+                                                    Math.max(0, collected - activityPaid - oneTimePaid - tuitionPaid)
+                                                );
+
+                                                const tuitionPending = Math.max(0, adjustedTuition - tuitionPaid);
+                                                const activityPending = Math.max(0, activityTotal - activityPaid);
+                                                const oneTimePending = Math.max(0, oneTimeTotal - oneTimePaid);
+                                                const lateFeePending = Math.max(0, lateFee - lateFeePaid);
+
+
                                                 return (
+
                                                     <TableRow
                                                         key={
                                                             fee.transaction_uuid ||
@@ -4952,19 +5099,59 @@ export default function FeeLedger() {
                                                         </TableCell>
 
                                                         {/* TUITION */}
-                                                        <TableCell>
+                                                        {/* <TableCell>
                                                             ₹
                                                             {tuitionTotal.toFixed(
                                                                 2
+                                                            )}
+                                                        </TableCell> */}
+
+                                                        {/* Toggle based Individual and total month tracking */}
+                                                        <TableCell>
+                                                            {showMonthlyBreakdown && months.length > 0 ? (
+                                                                months.map((month) => {
+                                                                    const amount = getMonthAmount(month, "tuition");
+
+                                                                    return (
+                                                                        <div key={month}>
+                                                                            {month}: ₹
+                                                                            {amount === null
+                                                                                ? "—"
+                                                                                : amount.toFixed(2)}
+                                                                        </div>
+                                                                    );
+                                                                })
+                                                            ) : (
+                                                                `₹${Number(tuitionTotal || 0).toFixed(2)}`
                                                             )}
                                                         </TableCell>
 
                                                         {/* ACTIVITY */}
                                                         <TableCell>
-                                                            ₹
-                                                            {activityTotal.toFixed(
-                                                                2
+                                                            {showMonthlyBreakdown && months.length > 0 ? (
+                                                                months.map((month) => {
+                                                                    const amount = getMonthAmount(month, "activity");
+
+                                                                    return (
+                                                                        <div key={month}>
+                                                                            {month}: ₹
+                                                                            {amount === null
+                                                                                ? "—"
+                                                                                : amount.toFixed(2)}
+                                                                        </div>
+                                                                    );
+                                                                })
+                                                            ) : (
+                                                                `₹${Number(activityTotal || 0).toFixed(2)}`
                                                             )}
+                                                        </TableCell>
+
+                                                        <TableCell>
+                                                            ₹{tuitionPending.toFixed(2)}
+                                                        </TableCell>
+
+                                                        <TableCell>
+                                                            ₹{activityPending.toFixed(2)}
                                                         </TableCell>
 
                                                         {/* TRANSACTION TOTAL */}
@@ -4984,7 +5171,7 @@ export default function FeeLedger() {
                                                         </TableCell>
 
                                                         {/* BALANCE */}
-                                                        <TableCell>
+                                                        {/*<TableCell>
                                                             {balance > 0 ? (
                                                                 <Chip
                                                                     size="small"
@@ -5000,7 +5187,7 @@ export default function FeeLedger() {
                                                                     label="Settled"
                                                                 />
                                                             )}
-                                                        </TableCell>
+                                                        </TableCell>*/}
 
                                                         {/* PAYMENT METHOD */}
                                                         <TableCell>
@@ -5341,13 +5528,15 @@ export default function FeeLedger() {
                                         <TableCell>Other</TableCell>
                                         <TableCell>Total</TableCell>
                                         <TableCell>Receipt</TableCell>
+                                        <TableCell>Paid Amount</TableCell>
+                                        <TableCell>Remaining Amount</TableCell>
                                         <TableCell align="center">
                                             Actions
                                         </TableCell>
                                     </TableRow>
                                 </TableHead>
 
-                                <TableBody>
+                                {/* <TableBody>
                                     {paymentHistory.oneTimePayments?.map((payment, index) => (
                                         <TableRow key={payment.fee?.uuid || index}>
 
@@ -5443,8 +5632,140 @@ export default function FeeLedger() {
                                             </TableRow>
                                         )}
                                 </TableBody>
+                            </Table> */}
+
+                                <TableBody>
+                                    {paymentHistory.oneTimePayments?.map((payment, index) => {
+                                        let breakdown = payment.fee?.fee_breakdown || {};
+
+                                        if (typeof breakdown === "string") {
+                                            try {
+                                                breakdown = JSON.parse(breakdown);
+                                            } catch {
+                                                breakdown = {};
+                                            }
+                                        }
+
+                                        const oneTime = breakdown.one_time || {};
+                                        const totals = breakdown.totals || {};
+
+                                        const oneTimeTotal = Object.values(oneTime).reduce(
+                                            (sum, value) =>
+                                                sum + Math.max(0, Number(value) || 0),
+                                            0
+                                        );
+
+                                        const lateFee = Math.max(
+                                            0,
+                                            Number(totals.late_fee) || 0
+                                        );
+
+                                        const discount = Math.max(
+                                            0,
+                                            Number(totals.discount ?? totals.total_discount) || 0
+                                        );
+
+                                        const totalAmount = Math.max(
+                                            0,
+                                            oneTimeTotal + lateFee - discount
+                                        );
+
+                                        const paidAmount = Math.max(
+                                            0,
+                                            Number(payment.amount) || 0
+                                        );
+
+                                        const remainingAmount = Math.max(
+                                            0,
+                                            totalAmount - paidAmount
+                                        );
+
+                                        return (
+                                            <TableRow key={payment.fee?.uuid || index}>
+                                                <TableCell>{payment.date || "-"}</TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.admission || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.annual || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.exam || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.commodities || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.transport || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    ₹{Number(payment.other || 0).toFixed(2)}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <strong>₹{totalAmount.toFixed(2)}</strong>
+                                                </TableCell>
+                                                <TableCell>{payment.receipt || "-"}</TableCell>
+                                                <TableCell>
+                                                    ₹{paidAmount.toFixed(2)}
+                                                </TableCell>
+
+                                                <TableCell>
+                                                    <strong>₹{remainingAmount.toFixed(2)}</strong>
+                                                </TableCell>
+                                                <TableCell align="center">
+                                                    <Stack
+                                                        direction="row"
+                                                        spacing={1}
+                                                        justifyContent="center"
+                                                    >
+                                                        <Tooltip title="View Receipt">
+                                                            <IconButton
+                                                                color="primary"
+                                                                size="small"
+                                                                onClick={() => viewReceipt(payment.fee)}
+                                                            >
+                                                                <VisibilityIcon />
+                                                            </IconButton>
+                                                        </Tooltip>
+
+                                                        <Tooltip title="Edit Payment">
+                                                            <IconButton
+                                                                color="warning"
+                                                                size="small"
+                                                                onClick={() => editMonth(payment.fee)}
+                                                            >
+                                                                <EditIcon />
+                                                            </IconButton>
+                                                        </Tooltip>
+
+                                                        <Tooltip title="Delete Payment">
+                                                            <IconButton
+                                                                color="error"
+                                                                size="small"
+                                                                onClick={() => deleteOneTimeFee(payment.fee)}
+                                                            >
+                                                                <DeleteIcon />
+                                                            </IconButton>
+                                                        </Tooltip>
+                                                    </Stack>
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })}
+
+                                    {(!paymentHistory.oneTimePayments ||
+                                        paymentHistory.oneTimePayments.length === 0) && (
+                                            <TableRow>
+                                                <TableCell colSpan={10} align="center">
+                                                    No one-time payments found
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
+                                </TableBody>
                             </Table>
+
                         </TableContainer>
+
                     </CardContent>
                 </Card>
 
@@ -6335,7 +6656,8 @@ export default function FeeLedger() {
 
                                     <Grid item xs={12} md={4}>
 
-                                        <TextField
+                                        {/* Editable karna hai ise .......... */}
+                                        {/* <TextField
 
                                             fullWidth
 
@@ -6347,7 +6669,23 @@ export default function FeeLedger() {
                                                 readOnly: true
                                             }}
 
+                                        /> */}
+
+
+
+                                        <TextField
+                                            fullWidth
+                                            type="number"
+                                            label="Late Fee"
+                                            value={editReceipt?.late_fee ?? 0}
+                                            onChange={(e) =>
+                                                updateEditField(
+                                                    "late_fee",
+                                                    Number(e.target.value)
+                                                )
+                                            }
                                         />
+
 
                                     </Grid>
 
